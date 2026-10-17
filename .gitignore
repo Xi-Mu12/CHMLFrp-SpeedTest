@@ -1,0 +1,24 @@
+# 构建产物
+build/bin
+frontend/dist
+*.exe
+
+# 依赖
+node_modules
+
+# IDE / 编辑器
+.idea/
+# .vscode/launch.json 是 Wails 模板开发配置，保留共享
+
+# 智能体工作目录（本地记忆，不进仓库）
+.workbuddy/
+
+# 备份文件
+*.bak
+
+# 本地源素材（最终成品已在 src/assets 中）
+frontend/轻爪翻译客户端发布横幅.png
+
+# 操作系统杂项
+.DS_Store
+Thumbs.db
