@@ -1,13 +1,9 @@
-name: build
+name: Build
 
-# 跨平台构建：Windows / macOS / Linux 三平台原生编译 CHMLFrp-SpeedTest。
-# 触发：push 到主分支、打 v* tag、PR、手动。
+# 手动构建：在 Actions 页点 Run workflow 时，三端（Windows / Linux / macOS）原生
+# 编译 CHMLFrp-SpeedTest 并打包，产物作为 artifact 上传供下载。
+# 提交代码不会自动构建；需要时手动跑。
 on:
-  push:
-    branches: [main, master]
-    tags: ['v*']
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -48,7 +44,7 @@ jobs:
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
 
-      # Linux: Wails webview + systray 依赖
+      # Linux: Wails WebKitGTK + systray 依赖
       - name: Install Linux dependencies
         if: matrix.os == 'linux'
         run: |
@@ -63,7 +59,7 @@ jobs:
             pkg-config \
             build-essential
 
-      # Windows: 装 NSIS 以便同时输出安装器（exe 仍会产出）
+      # Windows: 装 NSIS，构建时同时产出安装包
       - name: Install NSIS (Windows)
         if: matrix.os == 'windows'
         run: choco install nsis -y --no-progress
@@ -71,9 +67,30 @@ jobs:
       - name: Build
         run: wails build -clean
 
-      - name: Upload artifacts
+      - name: Package (Windows)
+        if: matrix.os == 'windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build/bin/CHMLFrp-SpeedTest.exe dist/CHMLFrp-SpeedTest-windows-amd64.exe
+
+      - name: Package (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          mkdir -p dist
+          tar -czf dist/CHMLFrp-SpeedTest-linux-amd64.tar.gz -C build/bin CHMLFrp-SpeedTest
+
+      - name: Package (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          mkdir -p dist
+          cd build/bin && zip -ry ../../dist/CHMLFrp-SpeedTest-macos-arm64.zip CHMLFrp-SpeedTest.app
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: build/bin/*
+          path: dist/*
           if-no-files-found: error
+
+      # 如需自动发布到 GitHub Release，再加 push.tags 触发与 Publish 步骤即可。
