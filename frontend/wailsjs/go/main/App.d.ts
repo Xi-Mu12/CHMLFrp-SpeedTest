@@ -10,6 +10,10 @@ export function CancelSpeedTest():Promise<void>;
 
 export function GetAutostart():Promise<boolean>;
 
+export function GetLocalIPs():Promise<Array<main.LocalIP>>;
+
+export function GetMyIPInfo():Promise<main.IPGeo>;
+
 export function GetNodes(arg1:string):Promise<Array<main.NodeItem>>;
 
 export function HideToTray():Promise<void>;
@@ -19,6 +23,8 @@ export function LogoutQZhua():Promise<void>;
 export function PausePrefer():Promise<void>;
 
 export function PauseSpeedTest():Promise<void>;
+
+export function QueryIPInfo(arg1:string):Promise<main.IPGeo>;
 
 export function QuitApp():Promise<void>;
 

@@ -16,11 +16,13 @@
 </div>
 <div id="app">
     <aside class="sidebar">
-        <div class="side-head"><span class="side-logo">CF</span><div class="side-brand"><b>CHMLFrp</b><small>优选中心</small></div></div>
+        <div class="side-head"><span class="side-logo">CF</span><div class="side-brand"><b>CHMLFrp</b><small>测速中心</small></div></div>
         <div class="workspace-label">工作台</div>
         <nav class="nav">
-            <button class="nav-item active" data-view="speed" title="节点优选"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4 13h7l-1 9 9-12h-7z"/></svg></span><span>节点优选</span></button>
+            <button class="nav-item active" data-view="speed" title="延迟测速"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4 13h7l-1 9 9-12h-7z"/></svg></span><span>延迟测速</span></button>
             <button class="nav-item" data-view="bandwidth" title="带宽测速"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 17V7m5 10V4m6 13V9m5 8V2"/><path d="M2 20h20"/></svg></span><span>带宽测速</span></button>
+            <button class="nav-item" data-view="tools" title="本机 IP"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg></span><span>本机 IP</span></button>
+            <button class="nav-item" data-view="logs" title="运行日志"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span>运行日志</span></button>
             <button class="nav-item" data-view="settings" title="设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></span><span>设置</span></button>
         </nav>
         <div class="side-account" id="sideAccount" role="button"><span class="acc-icon"><svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg></span><span class="acc-text"><b id="accTitle">未登录</b><small id="accSubtitle">点击登录</small></span></div>
@@ -28,11 +30,11 @@
 
     <main class="content">
         <section id="view-speed" class="view active">
-            <header class="compact-head"><div><h1>优选测试</h1><p>选择节点后开始测试</p></div><div class="compact-stats"><span>节点 <b id="totalNodes">--</b></span><span>已选 <b id="selectedNodes">0</b></span><span>最佳 <b id="bestDelay">--<em> ms</em></b></span><span id="runState">待优选</span><small id="runStateHint" class="hidden">准备开始优选</small></div><div class="toolbar"><button id="refreshBtn" class="tool-btn"><span>↻</span>刷新</button><div class="export-menu" id="preferExportMenu"><button id="preferExportBtn" class="tool-btn" type="button" aria-haspopup="true" aria-expanded="false"><span>↓</span>导出<em>▾</em></button><div class="export-dropdown hidden" id="preferExportDropdown"><button type="button" data-export="csv">导出 CSV</button><button type="button" data-export="png">导出图片</button></div></div></div></header>
+            <header class="compact-head"><div><h1>延迟测速</h1><p>TCPing 测各节点延迟与丢包，秒级出结果</p></div><div class="compact-stats"><span>节点 <b id="totalNodes">--</b></span><span>已选 <b id="selectedNodes">0</b></span><span>最佳 <b id="bestDelay">--<em> ms</em></b></span><span id="runState">待测速</span><small id="runStateHint" class="hidden">准备开始测速</small></div><div class="toolbar"><button id="refreshBtn" class="tool-btn"><span>↻</span>刷新</button><div class="export-menu" id="preferExportMenu"><button id="preferExportBtn" class="tool-btn" type="button" aria-haspopup="true" aria-expanded="false"><span>↓</span>导出<em>▾</em></button><div class="export-dropdown hidden" id="preferExportDropdown"><button type="button" data-export="csv">导出 CSV</button><button type="button" data-export="png">导出图片</button></div></div></div></header>
             <div class="filter-row"><span class="filter-caption">按节点组筛选</span><button class="filter active" data-filter="all">全部</button><button class="filter" data-filter="vip">会员节点</button><button class="filter" data-filter="user">普通节点</button><label class="node-search"><span>⌕</span><input id="preferNodeSearch" type="search" placeholder="搜索节点名称或编号" autocomplete="off"></label><span class="filter-count" id="filterCount">-- 个节点</span></div>
             <div class="view-scroll">
                 <section id="preferLeaderboard" class="prefer-leaderboard hidden" aria-live="polite">
-                    <div class="leaderboard-head"><div><span class="leaderboard-kicker">优选结果</span><h2>节点排行榜</h2></div><span id="preferLeaderboardMeta" class="leaderboard-meta"></span></div>
+                    <div class="leaderboard-head"><div><span class="leaderboard-kicker">测速结果</span><h2>延迟排行榜</h2></div><span id="preferLeaderboardMeta" class="leaderboard-meta"></span></div>
                     <div id="preferRankingList" class="prefer-ranking-list"></div>
                 </section>
                 <div id="preferAdBanner" class="ad-banner" role="button" tabindex="0" title="了解轻爪翻译客户端">
@@ -42,7 +44,7 @@
                 </div>
                 <div id="groups" class="groups"><div class="empty-state"><b>点击刷新加载节点</b><small>节点数据会显示在这里</small></div></div>
             </div>
-            <footer class="preferbar"><div class="prefer-current"><span>当前优选节点</span><b id="preferStatus">未开始</b></div><div class="prefer-actions"><button id="selectAllBtn" class="btn secondary">全选节点</button><button id="preferCancelBtn" class="btn speed-stop hidden">停止优选</button><button id="preferBtn" class="btn speed-pause">开始优选</button></div></footer>
+            <footer class="preferbar"><div class="prefer-current"><span>当前测速节点</span><b id="preferStatus">未开始</b></div><div class="prefer-actions"><button id="selectAllBtn" class="btn secondary">全选节点</button><button id="preferCancelBtn" class="btn speed-stop hidden">停止测速</button><button id="preferBtn" class="btn speed-pause">开始测速</button></div></footer>
             <div class="bandwidth-progress prefer-progress-bar"><span id="preferProgressFill"></span></div>
         </section>
 
@@ -67,6 +69,32 @@
             <div id="speedTaskModal" class="bandwidth-modal hidden"><div class="bandwidth-modal-backdrop"></div><div class="bandwidth-modal-card batch-card"><div class="modal-titlebar"><span>批量测速</span><button id="closeSpeedTask" class="modal-close" title="关闭">×</button></div><div class="batch-body"><p class="batch-count">共 <b id="taskNodeCount">--</b> 个节点</p><div class="batch-options"><div class="batch-row"><span>并发数</span><b>1（串行，逐个节点测速）</b></div><div class="batch-row"><span>单次测速时长</span><b><span id="taskSecs">10</span> 秒 / 节点</b></div><div class="batch-row"><span>预计总耗时</span><b id="taskEta">--</b></div></div><div class="batch-note"><b>ℹ 测试说明</b><ul><li>将对已选节点逐个进行延迟与上下行带宽测速</li><li>测速过程中可随时点击“停止测速”中止</li><li>测速结果完成后可在页面上方导出 CSV / 图片</li></ul></div></div><div class="task-actions"><button id="taskCloseBtn" class="btn secondary">关闭</button><button id="taskStartBtn" class="btn primary">开始测试</button></div></div></div>
         </section>
 
+        <section id="view-tools" class="view">
+            <header class="compact-head"><div><h1>本机 IP</h1><p>本机网卡地址与当前公网 IP 信息</p></div><div class="compact-stats"><span>IPv4 <b id="toolIpv4Count">--</b></span><span>IPv6 <b id="toolIpv6Count">--</b></span><span id="toolQueryState">获取中…</span></div><div class="toolbar"><button id="toolsRefreshBtn" class="tool-btn" type="button"><span>↻</span>全部刷新</button></div></header>
+            <div class="tools-grid">
+                <section class="tools-panel">
+                    <div class="panel-title"><div><b>本机 IP 地址</b><small>所有已启用网卡的地址，可一键复制或查询归属地</small></div><span id="toolsAddrCount">--</span></div>
+                    <div id="localIpList" class="local-ip-list"><div class="empty-state compact"><span class="loader"></span><b>正在读取网卡</b></div></div>
+                </section>
+                <section class="tools-panel">
+                    <div class="panel-title"><div><b>IP 信息</b><small>ip-api.com 自动识别 · 中文地理位置 / 运营商 / ASN</small></div><div class="ip-panel-actions"><button id="myIpBackBtn" class="ip-btn hidden" type="button">回到本机</button><button id="myIpRefreshBtn" class="ip-btn" type="button">刷新</button></div></div>
+                    <div id="ipInfoCard" class="ip-geo is-loading"><div class="ip-geo-empty"><span class="loader"></span><b>正在获取当前 IP 信息</b></div></div>
+                    <div class="ip-query-form inline-form">
+                        <label><span>查询指定 IP</span><input id="ipQueryInput" type="text" placeholder="例如 210.75.225.254" autocomplete="off" spellcheck="false"/></label>
+                        <button id="ipQueryBtn" class="btn secondary" type="button">查询</button>
+                    </div>
+                </section>
+            </div>
+        </section>
+
+        <section id="view-logs" class="view">
+            <header class="compact-head"><div><h1>运行日志</h1><p>延迟测速与带宽测速的执行记录</p></div><div class="compact-stats"><span>共 <b id="logTotalCount">0</b></span><span>成功 <b id="logOkCount">0</b></span><span>失败 <b id="logErrCount">0</b></span><span>警告 <b id="logWarnCount">0</b></span></div><div class="toolbar"><button id="logClearBtn" class="tool-btn"><span>⌫</span>清空</button></div></header>
+            <div class="filter-row"><span class="filter-caption">按来源筛选</span><button class="filter log-filter active" data-log-filter="all">全部</button><button class="filter log-filter" data-log-filter="prefer">延迟测速</button><button class="filter log-filter" data-log-filter="bandwidth">带宽测速</button><label class="node-search"><span>⌕</span><input id="logSearch" type="search" placeholder="搜索日志内容" autocomplete="off"></label><label class="log-autoscroll"><input id="logAutoScroll" type="checkbox" checked/> 自动滚动</label><span class="filter-count" id="logFilterCount">0 条</span></div>
+            <div id="logList" class="log-list">
+                <div class="log-empty"><b>暂无日志</b><small>执行延迟测速或带宽测速后，记录会显示在这里</small></div>
+            </div>
+        </section>
+
         <section id="view-nodes" class="view"><header class="page-head"><div><h1>节点列表</h1><p class="subtitle">查看所有可用节点及其基础能力。</p></div><div class="page-actions"><select id="groupFilter"><option value="all">全部节点组</option><option value="user">普通节点</option><option value="vip">会员节点</option></select><button id="refreshNodes" class="btn secondary">↻ 刷新</button></div></header><div id="nodesMsg" class="empty-state compact"><b>点击刷新加载节点</b><small>节点数据会显示在下方列表中</small></div><div class="table-card hidden" id="nodesCard"><table class="node-table" id="nodesTable"><thead><tr><th>编号</th><th>节点名称</th><th>区域</th><th>节点组</th><th>地域</th><th>状态</th><th>延迟</th><th>带宽速度</th></tr></thead><tbody></tbody></table></div></section>
 
         <section id="view-settings" class="view"><header class="page-head"><div><h1>偏好设置</h1><p class="subtitle">主题外观与启动行为。</p></div></header><div class="settings-list"><div class="settings-group"><div class="settings-group-head"><svg viewBox="0 0 24 24"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M2 14h4"/><path d="M10 8h4"/><path d="M18 16h4"/></svg>系统</div><div class="settings-card"><div class="setting-row"><div class="setting-text"><b>开机自启</b><small id="autostartHint">系统启动时自动运行本应用</small></div><input id="setAutostart" type="checkbox" class="switch"/></div><div class="setting-row"><div class="setting-text"><b>关闭窗口时最小化到托盘</b><small>当前版本暂不支持系统托盘，后续版本提供</small></div><input id="setTray" type="checkbox" class="switch" disabled=""/></div></div></div><div class="settings-group"><div class="settings-group-head"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18" stroke-dasharray="3 2.4"/></svg>个性化</div><div class="settings-card"><div class="setting-row"><div class="setting-text"><b>跟随系统主题</b><small>自动跟随系统主题设置</small></div><input id="setThemeSystem" type="checkbox" class="switch"/></div><div class="setting-row hidden" id="themeManualRow"><div class="setting-text"><b>主题</b><small>手动选择暗色或亮色外观</small></div><div class="theme-options"><button class="filter theme-btn" type="button" data-theme-value="dark">暗色</button><button class="filter theme-btn" type="button" data-theme-value="light">亮色</button></div></div></div></div></div></section>
@@ -74,16 +102,16 @@
         <div id="preferDetail" class="bandwidth-modal hidden">
             <div class="bandwidth-modal-backdrop" id="preferDetailBackdrop"></div>
             <div class="bandwidth-modal-card prefer-detail-card" role="dialog" aria-modal="true" aria-labelledby="preferDetailName">
-                <div class="modal-titlebar"><span>节点优选详情 · <b id="preferDetailName">未选择节点</b></span><button id="closePreferDetail" class="modal-close" title="关闭">×</button></div>
-                <div class="prefer-detail-summary"><span id="preferDetailRegion">节点信息</span><span id="preferDetailStatus">等待优选</span></div>
+                <div class="modal-titlebar"><span>延迟测速详情 · <b id="preferDetailName">未选择节点</b></span><button id="closePreferDetail" class="modal-close" title="关闭">×</button></div>
+                <div class="prefer-detail-summary"><span id="preferDetailRegion">节点信息</span><span id="preferDetailStatus">等待测速</span></div>
                 <div class="prefer-detail-grid">
                     <div><span>已发送</span><b id="preferSent">暂无数据</b></div>
                     <div><span>已接收</span><b id="preferReceived">暂无数据</b></div>
                     <div><span>丢包率</span><b id="preferLoss">暂无数据</b></div>
                     <div><span>平均延迟</span><b id="preferDelay">--</b></div>
-                    <div><span>下载速度</span><b id="preferDownload">暂无数据</b></div>
+                    <div><span>端口</span><b id="preferPort">暂无数据</b></div>
                 </div>
-                <p class="prefer-detail-note">当前优选阶段已接入延迟测试；发送、接收、丢包和下载速度将在真实测速接口接入后显示。</p>
+                <p class="prefer-detail-note">延迟测速通过 TCPing（TCP 握手）测量节点可达性：已发送/已接收为握手尝试与成功次数，丢包率与平均延迟均来自真实探测结果；带宽速度请使用「带宽测速」。</p>
             </div>
         </div>
 

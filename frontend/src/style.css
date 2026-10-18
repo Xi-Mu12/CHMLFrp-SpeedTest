@@ -294,7 +294,7 @@
 .task-actions{display:flex;justify-content:flex-end;gap:10px;flex:0 0 auto;margin:16px 20px 18px;padding-top:14px;border-top:1px solid var(--line)}
 .task-actions .btn{min-width:88px}
 
-/* ---------- 统一节点卡片高度（优选 / 测速两页一致） ---------- */
+/* ---------- 统一节点卡片高度（延迟测速 / 带宽测速两页一致） ---------- */
 #view-speed .node-card,#view-bandwidth .node-card{display:flex;flex-direction:column;min-height:196px}
 #view-speed .node-card .nc-name,#view-bandwidth .node-card .nc-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #view-speed .node-card .prefer-metrics,#view-bandwidth .node-card .bandwidth-metrics{flex:1 1 auto}
@@ -464,3 +464,104 @@
 @media(max-width:850px){.node-search{flex:1 1 150px;min-width:130px;margin-left:4px}.filter-count{display:none}}
 :root[data-theme="light"] .node-search{background:#ffffff;border-color:#e2e6eb;color:#66707a}
 :root[data-theme="light"] .node-search:focus-within{border-color:#1c2128;box-shadow:0 0 0 2px rgba(28,33,40,.08)}
+
+/* ---------- 运行日志视图 ---------- */
+#view-logs.active{display:flex;flex-direction:column;overflow:hidden}
+#view-logs .compact-head,#view-logs .filter-row{flex:0 0 auto}
+.log-list{flex:1 1 auto;min-height:0;overflow-y:auto;margin-bottom:16px;padding:8px 12px;font-family:'Cascadia Code',Consolas,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.9;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.log-list::-webkit-scrollbar{width:8px}
+.log-list::-webkit-scrollbar-thumb{background:#292e36;border-radius:8px}
+.log-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;height:100%;min-height:180px;color:var(--dim);font-family:inherit}
+.log-empty b{font-size:13px;color:var(--muted)}
+.log-empty small{font-size:11px}
+.log-line{display:flex;gap:10px;align-items:baseline;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+.log-line:last-child{border-bottom:0}
+.log-time{color:var(--dim);flex:0 0 auto;font-size:10.5px;font-variant-numeric:tabular-nums}
+.log-source{flex:0 0 auto;min-width:38px;text-align:center;padding:0 6px;border-radius:3px;font-size:9.5px;font-weight:600;letter-spacing:.3px}
+.log-source.prefer{background:rgba(246,130,31,.16);color:#f6a04a}
+.log-source.bandwidth{background:rgba(86,150,255,.16);color:#7bb3ff}
+.log-tag{flex:0 0 auto;min-width:34px;text-align:center;padding:0 5px;border-radius:3px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.log-tag.info{background:rgba(140,150,165,.14);color:#a9b3c1}
+.log-tag.ok{background:rgba(45,180,95,.18);color:#6fd49a}
+.log-tag.warn{background:rgba(246,130,31,.18);color:#f6a04a}
+.log-tag.err{background:rgba(239,107,107,.18);color:#ff9b9b}
+.log-msg{flex:1 1 auto;min-width:0;color:var(--text);word-break:break-word}
+.log-autoscroll{display:flex;align-items:center;gap:6px;margin-left:10px;font-size:11px;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap}
+.log-autoscroll input{accent-color:var(--orange);cursor:pointer}
+:root[data-theme="light"] .log-list{background:#ffffff;border-color:#e2e6eb}
+:root[data-theme="light"] .log-list::-webkit-scrollbar-thumb{background:#e2e6eb}
+:root[data-theme="light"] .log-line{border-color:rgba(0,0,0,.04)}
+:root[data-theme="light"] .log-source.prefer{background:rgba(220,110,20,.12);color:#c46a14}
+:root[data-theme="light"] .log-source.bandwidth{background:rgba(28,80,180,.10);color:#2a5cc7}
+:root[data-theme="light"] .log-tag.info{background:rgba(90,100,115,.10);color:#5a6473}
+:root[data-theme="light"] .log-tag.ok{background:rgba(20,140,70,.12);color:#1f9d63}
+:root[data-theme="light"] .log-tag.warn{background:rgba(220,110,20,.14);color:#c46a14}
+:root[data-theme="light"] .log-tag.err{background:rgba(200,50,50,.12);color:#c43838}
+
+/* ---------- 本机 IP：地址枚举 + 归属地查询 ---------- */
+.tools-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:13px;align-items:start}
+.tools-panel{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:18px 20px;min-width:0}
+.tools-panel .panel-title{align-items:flex-start}
+.local-ip-list{display:flex;flex-direction:column;gap:8px;max-height:min(46vh,420px);overflow-y:auto;padding-right:2px}
+.local-ip-list::-webkit-scrollbar{width:6px}
+.local-ip-list::-webkit-scrollbar-thumb{background:#292e36;border-radius:6px}
+.ip-row{display:flex;align-items:center;gap:10px;padding:9px 11px;background:#121519;border:1px solid var(--line);border-radius:6px}
+.ip-main{flex:1;min-width:0}
+.ip-main b{display:block;font-size:13px;font-weight:600;color:var(--text);word-break:break-all}
+.ip-main small{display:block;margin-top:3px;font-size:10px;color:var(--dim)}
+.ip-tag{flex-shrink:0;font-size:10px;padding:3px 7px;border-radius:999px;border:1px solid #303640;background:#1c2026;color:var(--muted)}
+.ip-tag.wan{color:#8eb9ff;border-color:#29466f;background:#161f2b}
+.ip-tag.lan{color:#78e0ae;border-color:#255b40;background:#12211a}
+.ip-tag.v6{color:#c9a6ff;border-color:#46326b;background:#1e1830}
+.ip-actions{display:flex;gap:6px;flex-shrink:0}
+.ip-btn{padding:5px 10px;font-size:11px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--muted);transition:background-color .15s,color .15s,border-color .15s}
+.ip-btn:hover:not(:disabled){background:var(--panel2);color:var(--text);border-color:#414954}
+.ip-btn.lookup{color:var(--orange2);border-color:#63401f}
+.ip-btn.lookup:hover:not(:disabled){background:#2b1c0e}
+.ip-btn:disabled{opacity:.4;cursor:not-allowed}
+.ip-query-form{display:flex;flex-direction:column;gap:12px}
+.ip-query-form label{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--muted)}
+.ip-query-form input{width:100%;padding:9px 12px;background:#121519;border:1px solid var(--line);border-radius:5px;color:var(--text);font-size:12px;outline:none;user-select:text}
+.ip-query-form input:focus{border-color:var(--orange)}
+.ip-query-form input::placeholder{color:var(--dim)}
+.ip-query-form .btn{align-self:flex-start;padding:8px 20px}
+.ip-panel-actions{display:flex;gap:6px;flex-shrink:0}
+.ip-geo{border:1px solid var(--line);border-radius:6px;background:#121519;padding:14px 16px;min-height:158px;display:flex;flex-direction:column;gap:12px}
+.ip-geo.is-loading,.ip-geo.has-error{align-items:center;justify-content:center;text-align:center;border-style:dashed;border-color:#2b3139}
+.ip-geo-empty{display:flex;flex-direction:column;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.ip-geo-empty b{font-size:13px;color:var(--text)}
+.ip-geo-empty small{color:var(--dim);font-size:11px;line-height:1.6;word-break:break-word}
+.ip-geo.has-error{border-color:#6b3434}
+.ip-geo.has-error .ip-geo-empty b{color:var(--red)}
+.ip-geo-head{display:flex;flex-direction:column;gap:7px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.ip-geo-title{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.ip-geo-title b{font-size:18px;font-weight:600;color:var(--text);letter-spacing:.2px;user-select:text}
+.ip-badge{font-size:10px;padding:3px 8px;border-radius:999px;border:1px solid #2c3f5c;background:#151e2b;color:#8eb9ff;line-height:1.5}
+.ip-geo-sub{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)}
+.ip-geo-kind{color:var(--dim)}
+.ip-geo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.ip-geo-grid div{padding:9px 11px;background:var(--panel2);border:1px solid var(--line);border-radius:5px;min-width:0}
+.ip-geo-grid span{display:block;color:var(--dim);font-size:10px}
+.ip-geo-grid b{display:block;margin-top:6px;font-size:12.5px;color:var(--text);word-break:break-word}
+.ip-geo-grid em{display:block;margin-top:4px;font-style:normal;font-size:10.5px;color:var(--dim);word-break:break-word}
+.ip-geo-note{margin:0;color:var(--dim);font-size:10px}
+.ip-query-form.inline-form{flex-direction:row;align-items:flex-end;gap:10px;margin-top:13px}
+.ip-query-form.inline-form label{flex:1;min-width:0}
+.ip-query-form.inline-form .btn{align-self:stretch;padding:9px 20px}
+:root[data-theme="light"] .tools-panel{background:#ffffff;border-color:#e2e6eb}
+:root[data-theme="light"] .ip-row{background:#f7f8fa;border-color:#e2e6eb}
+:root[data-theme="light"] .ip-main b{color:#1c2128}
+:root[data-theme="light"] .ip-btn{color:#66707a;border-color:#e2e6eb}
+:root[data-theme="light"] .ip-btn:hover:not(:disabled){background:#f0f2f5;color:#1c2128}
+:root[data-theme="light"] .ip-btn.lookup{color:#c46a14;border-color:#e8c9a4}
+:root[data-theme="light"] .ip-btn.lookup:hover:not(:disabled){background:#fdf3e7}
+:root[data-theme="light"] .ip-tag{background:#eef1f4;border-color:#dfe4ea;color:#66707a}
+:root[data-theme="light"] .ip-query-form input{background:#ffffff;border-color:#e2e6eb;color:#1c2128}
+:root[data-theme="light"] .ip-geo{background:#f7f8fa;border-color:#e2e6eb}
+:root[data-theme="light"] .ip-geo.is-loading,:root[data-theme="light"] .ip-geo.has-error{border-color:#dfe4ea}
+:root[data-theme="light"] .ip-geo.has-error{border-color:#e6b8b8}
+:root[data-theme="light"] .ip-geo-title b{color:#1c2128}
+:root[data-theme="light"] .ip-geo-grid div{background:#ffffff;border-color:#e2e6eb}
+:root[data-theme="light"] .ip-geo-grid b{color:#1c2128}
+:root[data-theme="light"] .ip-badge{background:#eef4ff;border-color:#c9dcf7;color:#2f6bc4}
+@media(max-width:1100px){.tools-grid{grid-template-columns:1fr}}

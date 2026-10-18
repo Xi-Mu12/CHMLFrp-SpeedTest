@@ -7,7 +7,6 @@ import (
 	"math"
 	"math/rand"
 	"os"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +20,7 @@ type App struct {
 	ctx          context.Context
 	speedRun     int64 // 测速轮次 id，+1 即取消上一轮
 	speedPaused  int32
-	preferRun    int64 // 优选轮次 id，+1 即取消
+	preferRun    int64 // 延迟测速轮次 id，+1 即取消
 	preferPaused int32
 	authMu       sync.Mutex
 	qzhuaUser    qzhuaUser
@@ -250,150 +249,6 @@ func (a *App) ResumeSpeedTest() {
 	atomic.StoreInt32(&a.speedPaused, 0)
 }
 
-// ===== 模拟优选流（架子阶段） =====
-// 事件驱动：kind=start → 每个节点 start/done → finish。
-// 第二步把 sleep+随机延迟换成真实 PingAll/吞吐测速，事件名与字段不变，前端无需改动。
-
-// PreferEvent 优选进度事件
-type PreferEvent struct {
-	Kind   string  `json:"kind"`   // start / testing / node / finish / cancel
-	NodeID int     `json:"nodeId"` // testing/node 事件：当前节点
-	Name   string  `json:"name"`
-	Index  int     `json:"index"` // testing/node 事件：当前序号 1-based
-	Total  int     `json:"total"`
-	Delay  float64 `json:"delay"` // node 事件：测得延迟 ms
-	Result []struct {
-		ID    int     `json:"id"`
-		Name  string  `json:"name"`
-		Delay float64 `json:"delay"`
-	} `json:"result"` // finish 事件：按延迟升序
-}
-
-// StartPrefer 启动模拟优选：逐节点显示进度，产出随机但合理的延迟结果。
-// ids 为前端选中的节点 id，空表示全部节点。
-func (a *App) StartPrefer(ids []int) {
-	runID := atomic.AddInt64(&a.preferRun, 1)
-	atomic.StoreInt32(&a.preferPaused, 0)
-	go func(id int64) {
-		nodes, err := FetchNodes()
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
-			return
-		}
-		if len(ids) > 0 {
-			want := make(map[int]bool, len(ids))
-			for _, v := range ids {
-				want[v] = true
-			}
-			var sel []NodeBasic
-			for _, n := range nodes {
-				if want[n.ID] {
-					sel = append(sel, n)
-				}
-			}
-			nodes = sel
-		}
-		if len(nodes) == 0 {
-			runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
-			return
-		}
-		total := len(nodes)
-		runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "start", Total: total})
-
-		type item struct {
-			ID    int
-			Name  string
-			Delay float64
-		}
-		var items []item
-		for i, n := range nodes {
-			if atomic.LoadInt64(&a.preferRun) != id {
-				runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
-				return
-			}
-			// 该节点开始测试（前端高亮卡片 + 左下状态显示）
-			runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{
-				Kind: "testing", NodeID: n.ID, Name: n.Name, Index: i + 1, Total: total,
-			})
-			// 模拟耗时：每个节点 350~850ms，暂停期间不消耗时间。
-			if !a.waitPrefer(id, time.Duration(350+rand.Intn(500))*time.Millisecond) {
-				runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
-				return
-			}
-			// 模拟延迟：国内 18~95ms，国外 95~380ms
-			var d float64
-			if n.China == "yes" {
-				d = float64(18 + rand.Intn(78))
-			} else {
-				d = float64(95 + rand.Intn(286))
-			}
-			d = math.Round(d*10) / 10
-			items = append(items, item{ID: n.ID, Name: n.Name, Delay: d})
-			runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{
-				Kind: "node", NodeID: n.ID, Name: n.Name,
-				Index: i + 1, Total: total, Delay: d,
-			})
-		}
-		if atomic.LoadInt64(&a.preferRun) != id {
-			runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
-			return
-		}
-		// 按延迟升序产出结果
-		sort.Slice(items, func(x, y int) bool { return items[x].Delay < items[y].Delay })
-		ev := PreferEvent{Kind: "finish", Total: total}
-		for _, it := range items {
-			ev.Result = append(ev.Result, struct {
-				ID    int     `json:"id"`
-				Name  string  `json:"name"`
-				Delay float64 `json:"delay"`
-			}{ID: it.ID, Name: it.Name, Delay: it.Delay})
-		}
-		runtime.EventsEmit(a.ctx, "preferEvent", ev)
-	}(runID)
-}
-
-// CancelPrefer 取消优选
-func (a *App) CancelPrefer() {
-	atomic.AddInt64(&a.preferRun, 1)
-	atomic.StoreInt32(&a.preferPaused, 0)
-}
-
-func (a *App) PausePrefer() {
-	atomic.StoreInt32(&a.preferPaused, 1)
-}
-
-func (a *App) ResumePrefer() {
-	atomic.StoreInt32(&a.preferPaused, 0)
-}
-
-func (a *App) waitPrefer(id int64, duration time.Duration) bool {
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	start := time.Now()
-	pausedAt := time.Time{}
-	pausedTotal := time.Duration(0)
-	wasPaused := false
-	for now := range ticker.C {
-		if atomic.LoadInt64(&a.preferRun) != id {
-			return false
-		}
-		if atomic.LoadInt32(&a.preferPaused) == 1 {
-			if !wasPaused {
-				pausedAt = now
-				wasPaused = true
-			}
-			continue
-		}
-		if wasPaused {
-			pausedTotal += now.Sub(pausedAt)
-			wasPaused = false
-		}
-		if now.Sub(start)-pausedTotal >= duration {
-			return true
-		}
-	}
-	return false
-}
 
 // SaveCSV 弹系统保存对话框并写入 CSV（content 前端拼好，含 UTF-8 BOM）
 func (a *App) SaveCSV(content string) (string, error) {

@@ -1,5 +1,61 @@
 export namespace main {
 	
+	export class IPGeo {
+	    ip: string;
+	    version: number;
+	    country: string;
+	    countryCode: string;
+	    region: string;
+	    city: string;
+	    zip: string;
+	    isp: string;
+	    org: string;
+	    as: string;
+	    timeZone: string;
+	    latitude: number;
+	    longitude: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new IPGeo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ip = source["ip"];
+	        this.version = source["version"];
+	        this.country = source["country"];
+	        this.countryCode = source["countryCode"];
+	        this.region = source["region"];
+	        this.city = source["city"];
+	        this.zip = source["zip"];
+	        this.isp = source["isp"];
+	        this.org = source["org"];
+	        this.as = source["as"];
+	        this.timeZone = source["timeZone"];
+	        this.latitude = source["latitude"];
+	        this.longitude = source["longitude"];
+	    }
+	}
+	export class LocalIP {
+	    iface: string;
+	    ip: string;
+	    version: number;
+	    loopback: boolean;
+	    private: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalIP(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.iface = source["iface"];
+	        this.ip = source["ip"];
+	        this.version = source["version"];
+	        this.loopback = source["loopback"];
+	        this.private = source["private"];
+	    }
+	}
 	export class NodeItem {
 	    id: number;
 	    name: string;

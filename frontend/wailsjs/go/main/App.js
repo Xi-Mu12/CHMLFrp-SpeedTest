@@ -18,6 +18,14 @@ export function GetAutostart() {
   return window['go']['main']['App']['GetAutostart']();
 }
 
+export function GetLocalIPs() {
+  return window['go']['main']['App']['GetLocalIPs']();
+}
+
+export function GetMyIPInfo() {
+  return window['go']['main']['App']['GetMyIPInfo']();
+}
+
 export function GetNodes(arg1) {
   return window['go']['main']['App']['GetNodes'](arg1);
 }
@@ -36,6 +44,10 @@ export function PausePrefer() {
 
 export function PauseSpeedTest() {
   return window['go']['main']['App']['PauseSpeedTest']();
+}
+
+export function QueryIPInfo(arg1) {
+  return window['go']['main']['App']['QueryIPInfo'](arg1);
 }
 
 export function QuitApp() {
