@@ -136,7 +136,7 @@
 .side-account .acc-text b{font-size:13px;font-weight:600}
 .side-account .acc-text small{font-size:10px;color:var(--dim)}
 .side-account.logged-in .acc-text small{color:var(--muted)}
-.bandwidth-modal{left:250px}
+.bandwidth-modal{left:0;z-index:300}
 .nc-top{display:flex;align-items:center;gap:6px}
 .nc-id{margin-right:auto}
 .preferbar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:10px;padding:10px 0 0;border-top:0;min-height:42px}
@@ -567,3 +567,30 @@
 :root[data-theme="light"] .ip-geo-grid b{color:#1c2128}
 :root[data-theme="light"] .ip-badge{background:#eef4ff;border-color:#c9dcf7;color:#2f6bc4}
 @media(max-width:700px){.tools-query-panel .ip-query-form.inline-form{flex-direction:column;align-items:stretch}.tools-query-panel .ip-query-form.inline-form .btn{align-self:stretch}}
+
+/* ---------- 关闭窗口询问弹窗 ---------- */
+#closeAskModal{left:0;padding:0;z-index:300}
+#closeAskModal .close-ask-card{width:min(440px,calc(100vw - 54px));padding:35px 27px;background:#15181d;border:1px solid #3a414b;border-radius:12px;box-shadow:0 24px 70px rgba(0,0,0,.5)}
+.close-ask-head{display:flex;flex-direction:column;gap:5px;margin-bottom:18px}
+.close-ask-head b{font-size:16px;color:var(--text)}
+.close-ask-head small{font-size:11.5px;color:var(--muted)}
+.close-ask-options{display:flex;flex-direction:column;gap:10px}
+.close-ask-option{display:flex;align-items:center;gap:13px;width:100%;padding:13px 15px;text-align:left;background:#121519;border:1px solid var(--line);border-radius:9px;transition:border-color .15s,background .15s}
+.close-ask-option:hover{border-color:#4a5361;background:#181d23}
+.close-ask-option.danger:hover{border-color:rgba(217,75,75,.55)}
+.close-ask-icon{flex:0 0 36px;width:36px;height:36px;display:grid;place-items:center;border-radius:10px;background:#23272e;color:#9aa3ad}
+.close-ask-icon svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.close-ask-option.danger .close-ask-icon{background:rgba(217,75,75,.14);color:#ef8080}
+.close-ask-text b{display:block;font-size:13px;font-weight:600;color:var(--text)}
+.close-ask-text small{display:block;margin-top:3px;font-size:10.5px;color:var(--dim);line-height:1.5}
+.close-ask-note{margin-top:16px;text-align:center;font-size:10.5px;color:var(--dim);line-height:1.7}
+:root[data-theme="light"] #closeAskModal .close-ask-card{background:#ffffff;border-color:#e2e6eb;box-shadow:0 24px 70px rgba(30,45,70,.25)}
+:root[data-theme="light"] #closeAskModal .close-ask-head b{color:#1c2128}
+:root[data-theme="light"] #closeAskModal .close-ask-head small{color:#66707a}
+:root[data-theme="light"] #closeAskModal .close-ask-option{background:#f7f8fa;border-color:#e2e6eb}
+:root[data-theme="light"] #closeAskModal .close-ask-option:hover{background:#eef1f5;border-color:#c9d2dd}
+:root[data-theme="light"] #closeAskModal .close-ask-icon{background:#e8ebef;color:#5a6473}
+:root[data-theme="light"] #closeAskModal .close-ask-option.danger .close-ask-icon{background:#fdecec;color:#c43c3c}
+:root[data-theme="light"] #closeAskModal .close-ask-text b{color:#1c2128}
+:root[data-theme="light"] #closeAskModal .close-ask-text small{color:#66707a}
+:root[data-theme="light"] #closeAskModal .close-ask-note{color:#8a929c}

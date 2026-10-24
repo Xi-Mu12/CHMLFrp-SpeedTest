@@ -21,8 +21,8 @@ func main() {
 		Title:             "ChmlfrpSpeedTest",
 		Width:             1145,
 		Height:            700,
-		MinWidth:          900,
-		MinHeight:         560,
+		MinWidth:          440,
+		MinHeight:         360,
 		Frameless:         true,
 		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{

@@ -1,9 +1,12 @@
 import './style.css';
-import { GetNodes, StartPrefer, CancelPrefer, PausePrefer, ResumePrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, GetLocalIPs, GetMyIPInfo, QueryIPInfo } from '../wailsjs/go/main/App';
+import { GetNodes, StartPrefer, CancelPrefer, PausePrefer, ResumePrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, QuitApp, GetLocalIPs, GetMyIPInfo, QueryIPInfo } from '../wailsjs/go/main/App';
 import { EventsOn, WindowMinimise, WindowToggleMaximise, WindowGetPosition, WindowSetPosition, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { StartQZhuaLogin, LogoutQZhua, CancelQZhuaLogin } from '../wailsjs/go/main/App';
 
 const $ = (id) => document.getElementById(id);
+
+// 弹窗必须位于页面根部，才能越过内容区的层叠上下文并遮住标题栏和侧栏。
+document.querySelectorAll('.bandwidth-modal').forEach((modal) => document.body.append(modal));
 
 // ---------- 设置持久化 ----------
 const settings = {
@@ -32,7 +35,30 @@ document.querySelectorAll('.nav-item').forEach((btn) => {
 // ---------- 自定义标题栏 ----------
 $('tbMin').addEventListener('click', () => WindowMinimise());
 $('tbMax').addEventListener('click', () => WindowToggleMaximise());
-$('tbClose').addEventListener('click', () => HideToTray());
+// ---------- 关闭窗口行为：直接缩到托盘 / 弹窗询问 ----------
+const CLOSE_PREF_KEY = 'closeAction'; // 'tray' = 直接最小化到托盘；未设置 = 每次点击 × 询问
+function closeActionIsTray() { return localStorage.getItem(CLOSE_PREF_KEY) === 'tray'; }
+function syncTraySwitch() { $('setTray').checked = closeActionIsTray(); }
+$('tbClose').addEventListener('click', () => {
+    if (closeActionIsTray()) { HideToTray(); return; }
+    $('closeAskModal').classList.remove('hidden');
+});
+$('closeAskTray').addEventListener('click', () => {
+    localStorage.setItem(CLOSE_PREF_KEY, 'tray');
+    syncTraySwitch();
+    $('closeAskModal').classList.add('hidden');
+    HideToTray();
+});
+$('closeAskExit').addEventListener('click', () => {
+    $('closeAskModal').classList.add('hidden');
+    QuitApp();
+});
+$('closeAskBackdrop').addEventListener('click', () => $('closeAskModal').classList.add('hidden'));
+$('setTray').addEventListener('change', (e) => {
+    if (e.target.checked) localStorage.setItem(CLOSE_PREF_KEY, 'tray');
+    else localStorage.removeItem(CLOSE_PREF_KEY);
+});
+syncTraySwitch();
 
 let qzhuaLoggedIn = false;
 let loginVerifyUrl = '';
