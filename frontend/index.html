@@ -72,17 +72,18 @@
         <section id="view-tools" class="view">
             <header class="compact-head"><div><h1>本机 IP</h1><p>本机网卡地址与当前公网 IP 信息</p></div><div class="compact-stats"><span>IPv4 <b id="toolIpv4Count">--</b></span><span>IPv6 <b id="toolIpv6Count">--</b></span><span id="toolQueryState">获取中…</span></div><div class="toolbar"><button id="toolsRefreshBtn" class="tool-btn" type="button"><span>↻</span>全部刷新</button></div></header>
             <div class="tools-grid">
-                <section class="tools-panel">
-                    <div class="panel-title"><div><b>本机 IP 地址</b><small>所有已启用网卡的地址，可一键复制或查询归属地</small></div><span id="toolsAddrCount">--</span></div>
-                    <div id="localIpList" class="local-ip-list"><div class="empty-state compact"><span class="loader"></span><b>正在读取网卡</b></div></div>
-                </section>
-                <section class="tools-panel">
-                    <div class="panel-title"><div><b>IP 信息</b><small>ip-api.com 自动识别 · 中文地理位置 / 运营商 / ASN</small></div><div class="ip-panel-actions"><button id="myIpBackBtn" class="ip-btn hidden" type="button">回到本机</button><button id="myIpRefreshBtn" class="ip-btn" type="button">刷新</button></div></div>
-                    <div id="ipInfoCard" class="ip-geo is-loading"><div class="ip-geo-empty"><span class="loader"></span><b>正在获取当前 IP 信息</b></div></div>
+                <section class="tools-panel tools-query-panel">
                     <div class="ip-query-form inline-form">
                         <label><span>查询指定 IP</span><input id="ipQueryInput" type="text" placeholder="例如 210.75.225.254" autocomplete="off" spellcheck="false"/></label>
                         <button id="ipQueryBtn" class="btn secondary" type="button">查询</button>
                     </div>
+                </section>
+                <section class="tools-panel ip-info-panel">
+                    <div class="panel-title"><div><b>IP 信息</b><small>ip-api.com 自动识别 · 中文地理位置 / 运营商 / ASN</small></div><div class="ip-panel-actions"><button id="myIpBackBtn" class="ip-btn hidden" type="button">回到本机</button><button id="myIpRefreshBtn" class="ip-btn" type="button">刷新</button></div></div>
+                    <div id="ipInfoCard" class="ip-geo is-loading"><div class="ip-geo-empty"><span class="loader"></span><b>正在获取当前 IP 信息</b></div></div>
+                </section>
+                <section class="tools-panel local-ip-panel">
+                    <div id="localIpList" class="local-ip-list"><div class="empty-state compact"><span class="loader"></span><b>正在读取网卡</b></div></div>
                 </section>
             </div>
         </section>

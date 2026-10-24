@@ -1366,7 +1366,6 @@ function renderLocalIPs(ips) {
     const list = $('localIpList');
     $('toolIpv4Count').textContent = ips.filter((x) => x.version === 4).length;
     $('toolIpv6Count').textContent = ips.filter((x) => x.version === 6).length;
-    $('toolsAddrCount').textContent = `${ips.length} 个地址`;
     if (!ips.length) {
         list.innerHTML = '<div class="empty-state compact"><b>没有可用地址</b><small>网卡可能全部未启用</small></div>';
         return;
