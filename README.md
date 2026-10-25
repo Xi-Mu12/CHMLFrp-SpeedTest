@@ -35,21 +35,7 @@
 
 ### 1. 准备节点 IP 列表
 
-延迟测速需要一份本地 IP 列表，用来将 API 返回的节点名称与实际服务器 IP 关联。默认读取：
-
-```text
-%USERPROFILE%\Desktop\chmlfrp服务器ip.txt
-```
-
-文件按行书写，每行包含“节点名称”和 IPv4 地址即可；表头、`会员`、`免费` 等分组行会自动跳过。示例：
-
-```text
-节点名 IP 域名
-广州多线 203.0.113.10 gz.4.frp.one
-南京多线 203.0.113.20 nj.2.frp.one
-```
-
-程序会从文本中提取 IPv4，并按节点名称与 CHMLFrp API 返回的数据进行匹配。若修改了默认文件位置，请同步修改 `prefer.go` 中的 `preferIPListPath`。
+CHMLFrp API 返回的数据
 
 ### 2. 开始测速
 
