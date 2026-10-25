@@ -47,6 +47,7 @@ type NodeItem struct {
 	Group  string `json:"group"`
 	Web    string `json:"web"`
 	China  string `json:"china"`
+	IP     string `json:"ip"`
 	Udp    bool   `json:"udp"`
 	Fangyu bool   `json:"fangyu"`
 }
@@ -58,6 +59,10 @@ func (a *App) GetNodes(group string) ([]NodeItem, error) {
 		return nil, err
 	}
 	filtered := FilterNodesByGroup(nodes, group)
+	a.authMu.Lock()
+	token := a.qzhuaToken
+	a.authMu.Unlock()
+	ipByName := FetchNodeIPs(filtered, token)
 	out := make([]NodeItem, 0, len(filtered))
 	for _, n := range filtered {
 		out = append(out, NodeItem{
@@ -67,6 +72,7 @@ func (a *App) GetNodes(group string) ([]NodeItem, error) {
 			Group:  n.NodeGroup,
 			Web:    n.Web,
 			China:  n.China,
+			IP:     ipByName[n.Name],
 			Udp:    bool(n.UDP),
 			Fangyu: bool(n.Fangyu),
 		})

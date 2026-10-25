@@ -63,6 +63,7 @@ export namespace main {
 	    group: string;
 	    web: string;
 	    china: string;
+	    ip: string;
 	    udp: boolean;
 	    fangyu: boolean;
 	
@@ -78,6 +79,7 @@ export namespace main {
 	        this.group = source["group"];
 	        this.web = source["web"];
 	        this.china = source["china"];
+	        this.ip = source["ip"];
 	        this.udp = source["udp"];
 	        this.fangyu = source["fangyu"];
 	    }

@@ -628,6 +628,7 @@ function preferCardHTML(n) {
             <span>${pill}</span>
         </div>
         <div class="nc-name">${n.name}</div>
+        ${n.ip ? '<div class="nc-ip nc-id">IP ' + n.ip + '</div>' : ''}
         <div class="prefer-metrics"><span>已发送 <b data-stat="sent">${sentText}</b></span><span>已接收 <b data-stat="recv">${recvText}</b></span><span>丢包率 <b data-stat="loss">${lossText}</b></span><span>平均延迟 <b data-delay-value class="${delayClass}" >${delayText}</b></span></div>
         <button class="prefer-detail-btn" type="button" data-prefer-id="${n.id}">详情</button>
     `;

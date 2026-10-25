@@ -164,15 +164,7 @@ func (a *App) StartPrefer(ids []int) {
 	atomic.StoreInt32(&a.preferPaused, 0)
 	go func(id int64) {
 		// 1. 解析 txt 拿到 节点名 -> IP
-		raws, err := parseChmlIPList(preferIPListPath)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
-			return
-		}
-		ipByName := make(map[string]string, len(raws))
-		for _, r := range raws {
-			ipByName[r.Name] = r.IP
-		}
+		// 节点列表先从公开接口获取；节点 IP 优先从官方 /nodeinfo 获取。
 
 		// 2. FetchNodes 拿节点列表（含 ID/China/Name，免 Token）
 		nodes, err := FetchNodes()
@@ -192,6 +184,20 @@ func (a *App) StartPrefer(ids []int) {
 			for _, n := range nodes {
 				if want[n.ID] {
 					sel = append(sel, n)
+				}
+			}
+		}
+
+		// 官方启动器使用带 Bearer access_token 的 /nodeinfo 获取真实 IP。
+		// 未登录或接口暂时不可用时，兼容旧版桌面 IP 列表文件。
+		a.authMu.Lock()
+		token := a.qzhuaToken
+		a.authMu.Unlock()
+		ipByName := FetchNodeIPs(sel, token)
+		if raws, fileErr := parseChmlIPList(preferIPListPath); fileErr == nil {
+			for _, r := range raws {
+				if _, exists := ipByName[r.Name]; !exists {
+					ipByName[r.Name] = r.IP
 				}
 			}
 		}
@@ -255,22 +261,22 @@ func (a *App) StartPrefer(ids []int) {
 					Kind: "testing", NodeID: t.ID, Name: t.Name,
 					Index: idx + 1, Total: total,
 				})
-			// 先选端口：各节点开放的端口不统一（7000/80/81），
-			// 取第一个能连上的来测。全不通说明该节点当前没有 frps 在服务。
-			port, ok := pickPort(t.IP, preferPorts, preferProbeTimeout)
-			res := oneResult{id: t.ID, name: t.Name, port: port}
-			// TCPing 统计。端口全不通时按"发满次数、零响应、100% 丢包"上报，
-			// 与 PingOne 全部超时的返回保持一致，前端卡片显示才有意义。
-			sent, recv, loss := preferPingTimes, 0, 1.0
-			if ok {
-				pr := PingOne(t.Name, net.JoinHostPort(t.IP, strconv.Itoa(port)), preferPingTimes, preferPingTimeout)
-				sent, recv, loss = pr.Sent, pr.Recv, pr.LossRate
-				if pr.Recv > 0 {
-					res.ok = true
-					res.delay = float64(pr.AvgDelay.Microseconds()) / 1000.0
-					res.loss = pr.LossRate
+				// 先选端口：各节点开放的端口不统一（7000/80/81），
+				// 取第一个能连上的来测。全不通说明该节点当前没有 frps 在服务。
+				port, ok := pickPort(t.IP, preferPorts, preferProbeTimeout)
+				res := oneResult{id: t.ID, name: t.Name, port: port}
+				// TCPing 统计。端口全不通时按"发满次数、零响应、100% 丢包"上报，
+				// 与 PingOne 全部超时的返回保持一致，前端卡片显示才有意义。
+				sent, recv, loss := preferPingTimes, 0, 1.0
+				if ok {
+					pr := PingOne(t.Name, net.JoinHostPort(t.IP, strconv.Itoa(port)), preferPingTimes, preferPingTimeout)
+					sent, recv, loss = pr.Sent, pr.Recv, pr.LossRate
+					if pr.Recv > 0 {
+						res.ok = true
+						res.delay = float64(pr.AvgDelay.Microseconds()) / 1000.0
+						res.loss = pr.LossRate
+					}
 				}
-			}
 				// 测量期间可能已被取消或被新一轮取代，此时不能再 emit，
 				// 否则旧数据会写进新任务的进度条。
 				if atomic.LoadInt64(&a.preferRun) != id {
@@ -282,11 +288,11 @@ func (a *App) StartPrefer(ids []int) {
 				if !res.ok {
 					emitDelay = -1 // 失败标记，前端显示"超时"且不纳入 bestDelay
 				}
-			runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{
-				Kind: "node", NodeID: t.ID, Name: t.Name,
-				Index: done, Total: total, Delay: emitDelay, Port: res.port,
-				Sent: sent, Recv: recv, Loss: loss,
-			})
+				runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{
+					Kind: "node", NodeID: t.ID, Name: t.Name,
+					Index: done, Total: total, Delay: emitDelay, Port: res.port,
+					Sent: sent, Recv: recv, Loss: loss,
+				})
 			}(i, t)
 		}
 		wg.Wait()

@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -68,6 +70,23 @@ type nodeListResp struct {
 	Data  []NodeBasic `json:"data"`
 }
 
+// NodeInfo 是官方启动器 /nodeinfo 接口中测速所需的最小字段。
+// 官方接口返回的 ip 是节点对外提供服务时应连接的真实地址。
+type NodeInfo struct {
+	Name   string `json:"name"`
+	IP     string `json:"ip"`
+	RealIP string `json:"real_IP"`
+	RealIp string `json:"realIp"`
+	IPv6   string `json:"ipv6"`
+}
+
+type nodeInfoResp struct {
+	Msg   string   `json:"msg"`
+	Code  int      `json:"code"`
+	State string   `json:"state"`
+	Data  NodeInfo `json:"data"`
+}
+
 // ChmlUser 对应 GET/POST /userinfo 返回的 data。
 type ChmlUser struct {
 	ID            int    `json:"id"`
@@ -111,6 +130,82 @@ func FetchNodes() ([]NodeBasic, error) {
 		return nil, fmt.Errorf("获取节点列表失败: %s", r.Msg)
 	}
 	return r.Data, nil
+}
+
+// FetchNodeInfo 按官方启动器的方式获取单个节点的真实 IP。
+// /nodeinfo 是受保护接口，token 传入 OAuth access_token。
+func FetchNodeInfo(nodeName, token string) (NodeInfo, error) {
+	var info NodeInfo
+	nodeName = strings.TrimSpace(nodeName)
+	token = strings.TrimSpace(token)
+	if nodeName == "" {
+		return info, fmt.Errorf("节点名称为空")
+	}
+	if token == "" {
+		return info, fmt.Errorf("未登录，无法获取节点 IP")
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, ApiBase+"/nodeinfo?node="+url.QueryEscape(nodeName), nil)
+	if err != nil {
+		return info, fmt.Errorf("创建节点信息请求失败: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return info, fmt.Errorf("获取节点信息失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return info, fmt.Errorf("获取节点信息失败(%d)", resp.StatusCode)
+	}
+	var result nodeInfoResp
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return info, fmt.Errorf("解析节点信息失败: %w", err)
+	}
+	if strings.ToLower(strings.TrimSpace(result.State)) != "success" && result.Code != 200 {
+		return info, fmt.Errorf("获取节点信息失败: %s", result.Msg)
+	}
+	if result.Data.IP == "" {
+		result.Data.IP = result.Data.RealIP
+	}
+	if result.Data.IP == "" {
+		result.Data.IP = result.Data.RealIp
+	}
+	if result.Data.IP == "" {
+		return info, fmt.Errorf("节点信息未返回 IP")
+	}
+	return result.Data, nil
+}
+
+// FetchNodeIPs 并发获取节点 IP，单个节点失败不会阻断其它节点。
+func FetchNodeIPs(nodes []NodeBasic, token string) map[string]string {
+	result := make(map[string]string)
+	if strings.TrimSpace(token) == "" || len(nodes) == 0 {
+		return result
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	for _, node := range nodes {
+		node := node
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			info, err := FetchNodeInfo(node.Name, token)
+			if err != nil || info.IP == "" {
+				return
+			}
+			mu.Lock()
+			result[node.Name] = info.IP
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return result
 }
 
 // FetchUserInfo 使用 QZhua OAuth access_token 调用 CHMLFrp /userinfo。
