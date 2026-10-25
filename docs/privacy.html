@@ -35,7 +35,7 @@
     <a href="https://github.com/Xi-Mu12/CHMLFrp-SpeedTest">项目主页</a>
   </nav>
   <h1>隐私政策</h1>
-  <p class="meta">CHMLFrp-SpeedTest · 最后更新：2026 年 10 月 25 日 · 版本：1.2</p>
+  <p class="meta">CHMLFrp-SpeedTest · 最后更新：2026 年 10 月 25 日 · 版本：1.3</p>
 
   <div class="callout">
     <strong>概要：</strong>CHMLFrp-SpeedTest 主要在你的本机运行。作者不运营用于收集测速记录的后台，不建立遥测或用户行为分析系统。使用本机 IP 查询、账号登录或推广入口时，应用会按功能访问相应的第三方服务；本页面说明相关数据的来源、用途和去向。
@@ -47,7 +47,7 @@
     <li><strong>节点列表：</strong>从 CHMLFrp 公开接口 <code>cf-v2.uapis.cn</code> 拉取节点名称、区域和线路能力等公开信息。请求会经过网络服务商和该接口服务器，具体日志留存以相关服务方规则为准。</li>
     <li><strong>本机 IP 查询：</strong>使用「本机 IP」功能时，工具会访问 <strong>ip-api.com</strong> 获取当前公网 IP 的归属地、运营商和 ASN 信息；查询指定 IP 时，该 IP 会作为查询参数发送给该服务。该服务按自身隐私政策处理请求，并对免费接口设置访问频率限制。</li>
     <li><strong>账号登录（可选）：</strong>若你配置并使用 OAuth2/OIDC 登录，认证过程由 <code>account-api.qzhua.net</code> 处理。应用可能在当前运行期间读取昵称、头像、邮箱和令牌，以完成登录和界面展示；登录信息不会写入作者的服务器，也不会持久化保存到应用数据库。</li>
-    <li><strong>带宽测速：</strong>为测量真实上下行吞吐，工具会在测速期间通过 CHMLFrp 开放接口<strong>临时创建一条隧道</strong>，由本地 frpc 客户端接入节点完成回环吞吐测试；无论测速成功、失败还是取消，该隧道都会在用后<strong>立即删除</strong>。工具不保留隧道配置，也不保存测速记录。当前版本界面展示的为模拟吞吐数据，上述能力随带宽测速正式版上线，本政策将在对应版本发布时同步更新。</li>
+    <li><strong>带宽测速：</strong>为测量真实上下行吞吐，工具会在测速期间通过 CHMLFrp 开放接口<strong>临时创建一条隧道</strong>，由本地 frpc 客户端接入节点完成回环吞吐测试；无论测速成功、失败还是取消，该隧道都会在用后<strong>立即删除</strong>。工具不保留隧道配置，也不保存测速记录。</li>
     <li><strong>本地数据与导出：</strong>主题、节点选择、测速参数等偏好保存在本机；CSV / PNG 由你通过系统保存对话框选择位置，均不会自动上传。</li>
     <li><strong>推广入口：</strong>应用内包含一个静态推广入口。只有在你点击后，系统浏览器才会打开 <code>fanyi.qzhua.net</code>；应用不接入个性化广告 SDK 或跨应用跟踪。</li>
   </ul>
