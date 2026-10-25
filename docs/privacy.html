@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>隐私策略 - CHMLFrp-SpeedTest</title>
+<title>隐私政策 - CHMLFrp-SpeedTest</title>
 <style>
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
@@ -21,56 +21,68 @@
   .callout { background: #ddf4ff; border: 1px solid #54aeff; border-radius: 8px; padding: 12px 16px; margin: 16px 0; font-size: 14px; }
   a { color: #0969da; text-decoration: none; }
   a:hover { text-decoration: underline; }
+  .nav { margin: 0 0 24px; font-size: 13px; }
+  .nav a { margin-right: 16px; }
   .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #d8dee4; color: #59636e; font-size: 13px; }
   @media (max-width: 640px) { .page { padding: 28px 22px; } body { padding: 16px 8px; } }
 </style>
 </head>
 <body>
 <div class="page">
-  <h1>隐私策略</h1>
-  <p class="meta">CHMLFrp-SpeedTest · 生效日期：2026 年 10 月 25 日 · 版本：1.0</p>
+  <nav class="nav" aria-label="页面导航">
+    <a href="./privacy.html">隐私政策</a>
+    <a href="./terms.html">服务条款</a>
+    <a href="https://github.com/Xi-Mu12/CHMLFrp-SpeedTest">项目主页</a>
+  </nav>
+  <h1>隐私政策</h1>
+  <p class="meta">CHMLFrp-SpeedTest · 最后更新：2026 年 10 月 25 日 · 版本：1.2</p>
 
   <div class="callout">
-    <strong>概要：</strong>CHMLFrp-SpeedTest 是一款运行在你本机的桌面工具。它<strong>不收集、不上传、不存储任何个人身份信息</strong>，不含任何遥测、统计或广告代码。本页面说明工具在运行过程中会接触哪些数据，以及这些数据的去向。
+    <strong>概要：</strong>CHMLFrp-SpeedTest 主要在你的本机运行。作者不运营用于收集测速记录的后台，不建立遥测或用户行为分析系统。使用本机 IP 查询、账号登录或推广入口时，应用会按功能访问相应的第三方服务；本页面说明相关数据的来源、用途和去向。
   </div>
 
   <h2>一、本工具处理的信息</h2>
   <ul>
-    <li><strong>节点延迟测速：</strong>工具会向你选择的 CHMLFrp 节点公网地址发起 TCP 连接探测，以统计延迟与丢包率。测速对象为节点公网 IP / 域名，不包含你的个人数据。</li>
-    <li><strong>节点列表：</strong>从 CHMLFrp 公开接口 <code>cf-v2.uapis.cn</code> 拉取节点列表（名称、区域、线路类型等公开信息）。</li>
-    <li><strong>本机 IP 查询：</strong>使用「本机 IP」功能时，工具会向第三方服务 <strong>ip-api.com</strong> 发送请求，以获取你当前的公网 IP 及其归属地、运营商、ASN 信息。该请求由 ip-api.com 按其自身隐私策略处理；免费接口有访问频率限制。</li>
-    <li><strong>账号登录（可选）：</strong>若你配置并使用 OAuth2/OIDC 登录，工具会通过轻爪统一认证（<code>account-api.qzhua.net</code>）获取你的昵称、头像和邮箱，<strong>仅用于应用界面展示，并只保存在你的本机</strong>，不会上传至任何其他服务器。</li>
-    <li><strong>带宽测速（功能上线后）：</strong>会通过 CHMLFrp 开放接口临时创建一条隧道用于吞吐测试，<strong>测速完成后立即删除</strong>，不会保留隧道或测速记录。</li>
-    <li><strong>结果导出：</strong>导出的 CSV / 图片由你通过系统保存对话框自选位置，仅存放在本地。</li>
+    <li><strong>节点延迟测速：</strong>工具会向你选择的 CHMLFrp 节点公网地址发起 TCP 连接探测，以统计延迟与丢包率。目标服务器可能看到你的来源 IP；工具不会通过该连接发送个人资料。</li>
+    <li><strong>节点列表：</strong>从 CHMLFrp 公开接口 <code>cf-v2.uapis.cn</code> 拉取节点名称、区域和线路能力等公开信息。请求会经过网络服务商和该接口服务器，具体日志留存以相关服务方规则为准。</li>
+    <li><strong>本机 IP 查询：</strong>使用「本机 IP」功能时，工具会访问 <strong>ip-api.com</strong> 获取当前公网 IP 的归属地、运营商和 ASN 信息；查询指定 IP 时，该 IP 会作为查询参数发送给该服务。该服务按自身隐私政策处理请求，并对免费接口设置访问频率限制。</li>
+    <li><strong>账号登录（可选）：</strong>若你配置并使用 OAuth2/OIDC 登录，认证过程由 <code>account-api.qzhua.net</code> 处理。应用可能在当前运行期间读取昵称、头像、邮箱和令牌，以完成登录和界面展示；登录信息不会写入作者的服务器，也不会持久化保存到应用数据库。</li>
+    <li><strong>带宽测速：</strong>为测量真实上下行吞吐，工具会在测速期间通过 CHMLFrp 开放接口<strong>临时创建一条隧道</strong>，由本地 frpc 客户端接入节点完成回环吞吐测试；无论测速成功、失败还是取消，该隧道都会在用后<strong>立即删除</strong>。工具不保留隧道配置，也不保存测速记录。当前版本界面展示的为模拟吞吐数据，上述能力随带宽测速正式版上线，本政策将在对应版本发布时同步更新。</li>
+    <li><strong>本地数据与导出：</strong>主题、节点选择、测速参数等偏好保存在本机；CSV / PNG 由你通过系统保存对话框选择位置，均不会自动上传。</li>
+    <li><strong>推广入口：</strong>应用内包含一个静态推广入口。只有在你点击后，系统浏览器才会打开 <code>fanyi.qzhua.net</code>；应用不接入个性化广告 SDK 或跨应用跟踪。</li>
   </ul>
 
   <h2>二、本工具不做什么</h2>
   <ul>
-    <li>不集成任何遥测（Telemetry）、崩溃统计、数据分析或广告 SDK；</li>
+    <li>不集成遥测（Telemetry）、崩溃统计、数据分析或个性化广告 SDK；</li>
     <li>不收集设备标识、硬件信息、使用习惯或位置轨迹；</li>
-    <li>不向任何第三方出售、共享或传输你的个人信息；</li>
-    <li>除本节「一」中列出的第三方服务外，不与任何其他服务器通信。</li>
+    <li>作者不出售或建立用于共享个人信息的服务；但你主动使用 IP 查询、账号登录或第三方推广入口时，相关请求会发送给对应服务提供方；</li>
+    <li>除本政策列出的功能服务和你主动打开的外部链接外，不建立额外的后台数据通道。</li>
   </ul>
 
   <h2>三、数据存储</h2>
-  <p>应用配置、主题偏好与可选的登录状态仅保存在你的本机（应用配置目录）。卸载或删除应用数据后，相关信息随之移除。本工具没有服务端，不存在远程数据库。</p>
+  <p>应用配置、主题偏好、节点选择和测速参数保存在你的本机（包括前端本地存储）。账号登录信息仅在当前进程中使用，应用退出后不会作为用户数据库保存。本工具没有用于接收这些数据的作者自有服务端，不存在对应的远程数据库。卸载或删除应用数据后，本地配置可能随之移除。</p>
 
   <h2>四、第三方服务</h2>
-  <p>工具在运行中可能访问以下第三方服务，它们的数据处理受其各自隐私策略约束：</p>
+  <p>工具可能访问以下服务。除特别说明外，这些服务由独立第三方运营，其数据处理以各自的服务条款和隐私政策为准：</p>
   <ul>
-    <li><code>cf-v2.uapis.cn</code> — CHMLFrp 节点公开数据接口；</li>
-    <li><code>ip-api.com</code> — 公网 IP 归属地查询；</li>
-    <li><code>account-api.qzhua.net</code> — 可选的 OAuth2/OIDC 账户登录。</li>
+    <li><code>cf-v2.uapis.cn</code> — 获取 CHMLFrp 节点公开数据；</li>
+    <li><code>ip-api.com</code> — 查询公网 IP 归属地；</li>
+    <li><code>account-api.qzhua.net</code> — 可选的 OAuth2/OIDC 账户登录；</li>
+    <li><code>fanyi.qzhua.net</code> — 用户主动点击推广入口后打开的外部页面。</li>
   </ul>
 
   <h2>五、未成年人保护</h2>
   <p>本工具不面向未成年人定向收集信息。未成年人应在监护人指导下使用。</p>
 
-  <h2>六、策略更新</h2>
-  <p>若本策略发生重大变更，我们将通过应用新版本及 GitHub 仓库更新说明告知，并更新页面顶部的生效日期与版本号。继续使用本工具即视为接受更新后的策略。</p>
+  <h2>六、你的选择</h2>
+  <p>你可以不使用本机 IP 查询、账号登录和推广入口等可选功能，也可以在本机删除应用数据。若已使用第三方账号登录，可在认证服务方管理账号授权或联系认证服务方处理相关账号请求。</p>
 
-  <h2>七、联系方式</h2>
-  <p>如对本隐私策略有任何疑问，可通过以下方式联系：<br />
+  <h2>七、政策更新</h2>
+  <p>若本政策发生重大变更，我们会通过应用新版本及 GitHub 仓库更新说明，并更新页面顶部的日期与版本号。更新后的内容自页面标注日期起生效。</p>
+
+  <h2>八、联系方式</h2>
+  <p>如对本隐私政策有任何疑问，可通过以下方式联系：<br />
   邮箱：<a href="mailto:ximu.setback@qq.com">ximu.setback@qq.com</a><br />
   GitHub Issues：<a href="https://github.com/Xi-Mu12/CHMLFrp-SpeedTest/issues">github.com/Xi-Mu12/CHMLFrp-SpeedTest/issues</a></p>
 

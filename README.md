@@ -120,6 +120,11 @@ npm run dev
 - [ip-api.com](http://ip-api.com)：查询公网 IP 的地理位置、运营商和 ASN；免费接口有访问频率限制。
 - QZhua OIDC 服务：仅在配置 `QZHUA_CLIENT_ID` 后用于账户登录。
 
+## 法律与隐私
+
+- [隐私政策](./docs/privacy.html)
+- [服务条款](./docs/terms.html)
+
 ## 许可证
 
 [MIT License](./LICENSE)
