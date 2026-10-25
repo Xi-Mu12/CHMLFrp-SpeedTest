@@ -25,7 +25,7 @@
             <button class="nav-item" data-view="logs" title="运行日志"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span>运行日志</span></button>
             <button class="nav-item" data-view="settings" title="设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></span><span>设置</span></button>
         </nav>
-        <div class="side-account" id="sideAccount" role="button"><span class="acc-icon"><svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg></span><span class="acc-text"><b id="accTitle">未登录</b><small id="accSubtitle">点击登录</small></span></div>
+        <div class="side-account" id="sideAccount" role="button"><span class="acc-icon"><svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg><img id="accAvatar" class="acc-avatar" alt=""/></span><span class="acc-text"><b id="accTitle">未登录</b><small id="accSubtitle">点击登录</small></span></div>
     </aside>
 
     <main class="content">
@@ -131,12 +131,48 @@
                     <div class="login-footer">还没有账号？<a href="#" id="loginRegister">立即注册</a></div>
                 </div>
                 <div id="loginStep2" class="hidden">
-                    <div class="login-code"><span>授权页面已在浏览器打开</span><b>完成授权后返回应用</b></div>
+                    <div class="login-code"><span>授权页面已在浏览器打开，请确认授权</span><b id="loginUserCode">------</b></div>
+                    <button id="loginCopyCode" class="login-secondary" type="button">复制配对码</button>
                     <button id="loginOpenBrowser" class="login-primary">重新打开授权页</button>
                     <button id="loginCancelBtn" class="login-secondary">取消</button>
                     <div class="login-waiting"><i></i>等待授权完成...</div>
-                    <label class="login-keep"><input type="checkbox" checked/>保持登录状态</label>
                 </div>
+            </div>
+        </div>
+        <div id="profileModal" class="bandwidth-modal profile-modal hidden">
+            <div class="bandwidth-modal-backdrop" id="profileBackdrop"></div>
+            <div class="bandwidth-modal-card profile-card" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
+                <button id="profileClose" class="login-close" title="关闭">×</button>
+                <div class="profile-head">
+                    <img id="profileAvatar" class="profile-avatar" alt="用户头像" />
+                    <div class="profile-title">
+                        <h2 id="profileTitle">已登录</h2>
+                        <p id="profileEmail" class="profile-email">—</p>
+                    </div>
+                </div>
+                <div id="profileApiState" class="profile-api-state"></div>
+                <section class="profile-section">
+                    <div class="profile-section-title">轻爪账户</div>
+                    <div class="profile-grid profile-grid-basic">
+                        <div><span>用户标识</span><b id="profileSub">—</b></div>
+                        <div><span>昵称</span><b id="profileNickname">—</b></div>
+                    </div>
+                </section>
+                <section id="chmlProfileSection" class="profile-section hidden">
+                    <div class="profile-section-title">CHMLFrp 账户</div>
+                    <div class="profile-grid">
+                        <div><span>用户组</span><b id="profileUserGroup">—</b></div>
+                        <div><span>带宽限制</span><b id="profileBandwidth">—</b></div>
+                        <div><span>隧道数量</span><b id="profileTunnel">—</b></div>
+                        <div><span>当前连接</span><b id="profileConnections">—</b></div>
+                        <div><span>累计上传</span><b id="profileUpload">—</b></div>
+                        <div><span>累计下载</span><b id="profileDownload">—</b></div>
+                        <div><span>积分</span><b id="profileIntegral">—</b></div>
+                        <div><span>实名状态</span><b id="profileRealname">—</b></div>
+                        <div><span>用户组到期</span><b id="profileTerm">—</b></div>
+                    </div>
+                </section>
+                <button id="profileLogout" class="login-secondary profile-logout">退出登录</button>
             </div>
         </div>
     </main>

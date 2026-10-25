@@ -68,6 +68,33 @@ type nodeListResp struct {
 	Data  []NodeBasic `json:"data"`
 }
 
+// ChmlUser 对应 GET/POST /userinfo 返回的 data。
+type ChmlUser struct {
+	ID            int    `json:"id"`
+	Username      string `json:"username"`
+	Email         string `json:"email"`
+	QQ            string `json:"qq"`
+	UserGroup     string `json:"usergroup"`
+	Term          string `json:"term"`
+	Realname      string `json:"realname"`
+	Tunnel        int    `json:"tunnel"`
+	TunnelCount   int    `json:"tunnnelCount"`
+	CurrentConns  int    `json:"totalCurConns"`
+	TotalUpload   int64  `json:"total_upload"`
+	TotalDownload int64  `json:"total_download"`
+	Bandwidth     int    `json:"bandwidth"`
+	Integral      int    `json:"integral"`
+	UserImage     string `json:"userimg"`
+	RegisterTime  string `json:"regtime"`
+}
+
+type userInfoResp struct {
+	Msg   string   `json:"msg"`
+	Code  int      `json:"code"`
+	State string   `json:"state"`
+	Data  ChmlUser `json:"data"`
+}
+
 // FetchNodes 拉取全量节点列表（无需 Token）
 func FetchNodes() ([]NodeBasic, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -84,6 +111,45 @@ func FetchNodes() ([]NodeBasic, error) {
 		return nil, fmt.Errorf("获取节点列表失败: %s", r.Msg)
 	}
 	return r.Data, nil
+}
+
+// FetchUserInfo 使用 QZhua OAuth access_token 调用 CHMLFrp /userinfo。
+// 官方启动器通过 Authorization: Bearer <access_token> 传递登录态，不能将
+// OAuth access_token 当作旧版 token 表单字段提交。
+func FetchUserInfo(token string) (ChmlUser, error) {
+	var user ChmlUser
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return user, fmt.Errorf("用户令牌为空")
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, ApiBase+"/userinfo", nil)
+	if err != nil {
+		return user, fmt.Errorf("创建用户信息请求失败: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return user, fmt.Errorf("请求用户信息失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return user, fmt.Errorf("请求用户信息失败(%d)", resp.StatusCode)
+	}
+
+	var result userInfoResp
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return user, fmt.Errorf("解析用户信息失败: %w", err)
+	}
+	if strings.ToLower(strings.TrimSpace(result.State)) != "success" {
+		if result.Msg == "" {
+			result.Msg = "接口未返回成功状态"
+		}
+		return user, fmt.Errorf("获取用户信息失败: %s", result.Msg)
+	}
+	return result.Data, nil
 }
 
 // FilterNodesByGroup 按权限组过滤，group 支持: all / user / vip / user,vip（大小写不敏感）

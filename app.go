@@ -24,6 +24,8 @@ type App struct {
 	preferPaused int32
 	authMu       sync.Mutex
 	qzhuaUser    qzhuaUser
+	qzhuaToken   string
+	chmlUser     *ChmlUser
 	authCancel   context.CancelFunc
 }
 
@@ -248,7 +250,6 @@ func (a *App) PauseSpeedTest() {
 func (a *App) ResumeSpeedTest() {
 	atomic.StoreInt32(&a.speedPaused, 0)
 }
-
 
 // SaveCSV 弹系统保存对话框并写入 CSV（content 前端拼好，含 UTF-8 BOM）
 func (a *App) SaveCSV(content string) (string, error) {

@@ -84,6 +84,8 @@ export namespace main {
 	}
 	export class QZhuaLoginStart {
 	    verifyUrl: string;
+	    userCode: string;
+	    expiresIn: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new QZhuaLoginStart(source);
@@ -92,6 +94,8 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.verifyUrl = source["verifyUrl"];
+	        this.userCode = source["userCode"];
+	        this.expiresIn = source["expiresIn"];
 	    }
 	}
 

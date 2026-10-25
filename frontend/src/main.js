@@ -62,6 +62,78 @@ syncTraySwitch();
 
 let qzhuaLoggedIn = false;
 let loginVerifyUrl = '';
+let qzhuaProfile = null;
+
+const setText = (id, value, fallback = '—') => {
+    const el = $(id);
+    if (el) el.textContent = value === undefined || value === null || value === '' ? fallback : String(value);
+};
+const formatBytes = (value) => {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${(bytes / 1024 ** index).toFixed(index ? 2 : 0)} ${units[index]}`;
+};
+const formatBandwidth = (value) => {
+    const mbps = Number(value || 0);
+    return Number.isFinite(mbps) && mbps > 0 ? `${mbps} Mbps` : '—';
+};
+const setAvatar = (img, source, fallbackText) => {
+    if (!img) return;
+    img.onerror = () => {
+        img.removeAttribute('src');
+        img.alt = fallbackText || '用户头像';
+        img.classList.add('avatar-fallback');
+    };
+    img.classList.remove('avatar-fallback');
+    if (source) img.src = source;
+    else {
+        img.removeAttribute('src');
+        img.alt = fallbackText || '用户头像';
+        img.classList.add('avatar-fallback');
+    }
+};
+const renderQZhuaProfile = (profile, apiError = '') => {
+    qzhuaProfile = profile || null;
+    const qzhua = profile?.qzhua || {};
+    const chml = profile?.chml || null;
+    // 设备码流程只申请 chmlfrp_api scope，OIDC userinfo 可能取不到昵称和头像；
+    // 登录成功后的 CHMLFrp /userinfo 提供 username、userimg，优先用于应用账户卡片。
+    const name = chml?.username || qzhua.username || qzhua.preferredUsername || qzhua.nickname || qzhua.name || qzhua.email || '轻爪用户';
+    const picture = chml?.userimg || qzhua.picture || qzhua.avatar || '';
+    setText('accTitle', name);
+    setText('accSubtitle', chml?.usergroup || qzhua.email || '已登录');
+    $('sideAccount').classList.add('logged-in');
+    setAvatar($('accAvatar'), picture, name.slice(0, 1));
+
+    setAvatar($('profileAvatar'), picture, name.slice(0, 1));
+    setText('profileTitle', name);
+    setText('profileEmail', chml?.email || qzhua.email || '已登录');
+    setText('profileSub', qzhua.sub || '—');
+    setText('profileNickname', name);
+
+    const state = $('profileApiState');
+    if (state) {
+        state.textContent = apiError
+            ? `OAuth 登录成功，但 CHMLFrp 账户资料暂时无法获取：${apiError}`
+            : (chml ? '已同步 CHMLFrp 账户资料' : '已登录，等待账户资料');
+        state.classList.toggle('is-error', Boolean(apiError));
+    }
+    $('chmlProfileSection').classList.toggle('hidden', !chml);
+    if (!chml) return;
+    setText('profileUserGroup', chml.usergroup);
+    setText('profileBandwidth', formatBandwidth(chml.bandwidth));
+    setText('profileTunnel', `${chml.tunnel ?? 0} / ${chml.tunnnelCount ?? '—'}`);
+    setText('profileConnections', chml.totalCurConns ?? 0);
+    setText('profileUpload', formatBytes(chml.total_upload));
+    setText('profileDownload', formatBytes(chml.total_download));
+    setText('profileIntegral', chml.integral ?? 0);
+    setText('profileRealname', chml.realname);
+    setText('profileTerm', chml.term);
+};
+const closeProfileModal = () => $('profileModal').classList.add('hidden');
+const openProfileModal = () => $('profileModal').classList.remove('hidden');
 
 const showLoginStep1 = () => {
     $('loginStep1').classList.remove('hidden');
@@ -80,17 +152,22 @@ const closeLoginModal = (cancelLogin) => {
 EventsOn('qzhuaAuth', (event) => {
     if (event.status === 'logged_in') {
         qzhuaLoggedIn = true;
-        $('accTitle').textContent = event.username || '轻爪用户';
-        $('accSubtitle').textContent = '点击退出';
-        $('sideAccount').classList.add('logged-in');
+        renderQZhuaProfile(event.profile || { qzhua: {
+            username: event.username,
+            email: event.email,
+            picture: event.picture,
+        } }, event.apiError || '');
         $('loginModal').classList.add('hidden');
         return;
     }
     qzhuaLoggedIn = false;
+    qzhuaProfile = null;
     $('sideAccount').classList.remove('logged-in');
+    $('accAvatar').removeAttribute('src');
     $('accTitle').textContent = '未登录';
     if (event.status === 'waiting') {
         if (event.verifyUrl) loginVerifyUrl = event.verifyUrl;
+        if (event.userCode) $('loginUserCode').textContent = event.userCode;
         $('accSubtitle').textContent = '等待授权…';
         return;
     }
@@ -104,11 +181,12 @@ EventsOn('qzhuaAuth', (event) => {
         return;
     }
     $('accSubtitle').textContent = '点击登录';
+    closeProfileModal();
 });
 
 $('sideAccount').addEventListener('click', () => {
     if (qzhuaLoggedIn) {
-        LogoutQZhua();
+        openProfileModal();
         return;
     }
     openLoginModal();
@@ -121,6 +199,7 @@ $('loginAuthBtn').addEventListener('click', async () => {
     try {
         const res = await StartQZhuaLogin();
         loginVerifyUrl = res.verifyUrl || '';
+        $('loginUserCode').textContent = res.userCode || '------';
         $('loginStep1').classList.add('hidden');
         $('loginStep2').classList.remove('hidden');
     } catch (err) {
@@ -129,6 +208,13 @@ $('loginAuthBtn').addEventListener('click', async () => {
     } finally {
         btn.disabled = false;
     }
+});
+
+$('loginCopyCode').addEventListener('click', async () => {
+    const btn = $('loginCopyCode');
+    const ok = await copyText($('loginUserCode').textContent.trim());
+    btn.textContent = ok ? '已复制' : '复制失败';
+    setTimeout(() => { btn.textContent = '复制配对码'; }, 1500);
 });
 
 $('loginOpenBrowser').addEventListener('click', () => {
@@ -142,6 +228,12 @@ $('loginCancelBtn').addEventListener('click', async () => {
 
 $('loginClose').addEventListener('click', () => closeLoginModal(true));
 $('loginBackdrop').addEventListener('click', () => closeLoginModal(true));
+$('profileClose').addEventListener('click', closeProfileModal);
+$('profileBackdrop').addEventListener('click', closeProfileModal);
+$('profileLogout').addEventListener('click', async () => {
+    await LogoutQZhua();
+    closeProfileModal();
+});
 
 $('loginRegister').addEventListener('click', (e) => {
     e.preventDefault();
