@@ -23,7 +23,7 @@ const (
 	qzhuaScope  = "openid profile email offline_access"
 	// client_id 不是机密信息（Public Client 无 client_secret），直接内置，
 	// 终端用户无需任何配置。仅开发时可用环境变量 QZHUA_CLIENT_ID 覆盖。
-	qzhuaClientID = "YOUR_QZHUA_CLIENT_ID"
+	qzhuaClientID = "01a171b12d7c732cae3f21bd6a10963a"
 )
 
 type qzhuaOIDCConfig struct {
