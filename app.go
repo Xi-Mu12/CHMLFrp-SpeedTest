@@ -4,18 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"math"
-	"math/rand"
 	"os"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App Wails 后端：节点查询走真实 /node 接口（见 nodes.go），
-// 测速事件流架子阶段为模拟数据，第二步换成 prefer.go 的真实回显测速。
+// 延迟测速走 prefer.go 的真实 TCPing，带宽测速走 bwtest.go 的 frpc 隧道 + 本地回环。
 type App struct {
 	ctx          context.Context
 	speedRun     int64 // 测速轮次 id，+1 即取消上一轮
@@ -27,6 +24,12 @@ type App struct {
 	qzhuaToken   string
 	chmlUser     *ChmlUser
 	authCancel   context.CancelFunc
+
+	// 带宽测速期间的活跃 frpc 进程/临时隧道，退出时兜底清理
+	bwMu       sync.Mutex
+	bwProc     *frpcProc
+	bwTunnelID int
+	bwToken    string
 }
 
 // NewApp 创建 App 应用结构体
@@ -87,6 +90,12 @@ type SpeedTick struct {
 	Progress float64 `json:"progress"`
 	Elapsed  float64 `json:"elapsed"`
 	Total    float64 `json:"total"`
+	// 多节点串行测速时的上下文，前端用来显示“当前测速节点/第几个”
+	NodeID    int    `json:"nodeId"`
+	NodeName  string `json:"nodeName"`
+	NodeIndex int    `json:"nodeIndex"`
+	NodeCount int    `json:"nodeCount"`
+	Phase     string `json:"phase"` // prepare / test
 }
 
 // SpeedDone 单次测速汇总
@@ -111,134 +120,6 @@ type SpeedNodeProgressEvent struct {
 	ID       int     `json:"id"`
 	Name     string  `json:"name"`
 	Progress float64 `json:"progress"`
-}
-
-// StartSpeedTest 开始测速。架子阶段推送模拟事件流；
-// TODO(第二步): 换成 RunEchoSpeedTestBlocking 的真实数据，事件名保持不变，前端不用改。
-func (a *App) StartSpeedTest(addr string, seconds int, ids []int) {
-	if seconds <= 0 || seconds > 60 {
-		seconds = 10
-	}
-	runID := atomic.AddInt64(&a.speedRun, 1)
-	atomic.StoreInt32(&a.speedPaused, 0)
-	go func(id int64) {
-		total := float64(seconds)
-		start := time.Now()
-		pausedTotal := 0.0
-		pauseStarted := time.Time{}
-		wasPaused := false
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-
-		// 本次测速覆盖的节点：随进度逐个输出延迟，卡片实时显示
-		var targets []NodeBasic
-		if fetched, err := FetchNodes(); err == nil {
-			if len(ids) > 0 {
-				want := make(map[int]bool, len(ids))
-				for _, v := range ids {
-					want[v] = true
-				}
-				for _, n := range fetched {
-					if want[n.ID] {
-						targets = append(targets, n)
-					}
-				}
-			} else {
-				targets = fetched
-			}
-		}
-		emittedDelays := 0
-		emitNodeDelays := func(upTo int) {
-			if upTo > len(targets) {
-				upTo = len(targets)
-			}
-			for emittedDelays < upTo {
-				n := targets[emittedDelays]
-				var d float64
-				if n.China == "yes" {
-					d = float64(18 + rand.Intn(78))
-				} else {
-					d = float64(95 + rand.Intn(286))
-				}
-				d = math.Round(d*10) / 10
-				runtime.EventsEmit(a.ctx, "speedNode", SpeedNodeEvent{ID: n.ID, Name: n.Name, Delay: d})
-				emittedDelays++
-			}
-		}
-
-		// 模拟：爬升->波动->稳定的曲线，峰值随机
-		downPeak := 40 + rand.Float64()*80
-		upPeak := 15 + rand.Float64()*30
-		var upSum, downSum float64
-		var n float64
-		var upMax, downMax float64
-
-		emit := func(cancelled bool) {
-			var upAvg, downAvg float64
-			if n > 0 {
-				upAvg, downAvg = upSum/n, downSum/n
-			}
-			runtime.EventsEmit(a.ctx, "speedDone", SpeedDone{
-				Addr: addr, UpAvg: upAvg, DownAvg: downAvg,
-				UpPeak: upMax, DownPeak: downMax, Cancelled: cancelled,
-			})
-		}
-
-		for now := range ticker.C {
-			if atomic.LoadInt64(&a.speedRun) != id {
-				emit(true)
-				return
-			}
-			if atomic.LoadInt32(&a.speedPaused) == 1 {
-				if !wasPaused {
-					pauseStarted = now
-					wasPaused = true
-				}
-				continue
-			}
-			if wasPaused {
-				pausedTotal += now.Sub(pauseStarted).Seconds()
-				wasPaused = false
-			}
-			elapsed := now.Sub(start).Seconds() - pausedTotal
-			if elapsed >= total {
-				emitNodeDelays(len(targets))
-				emit(false)
-				return
-			}
-			// 爬升曲线 + 正弦波动 + 噪声
-			ramp := 1 - math.Exp(-elapsed/1.5)
-			wobble := 0.85 + 0.15*math.Sin(elapsed*2.1)
-			noise := 0.9 + rand.Float64()*0.2
-			down := downPeak * ramp * wobble * noise
-			up := upPeak * ramp * (0.9 + 0.1*math.Sin(elapsed*1.7)) * noise
-			upSum, downSum = upSum+up, downSum+down
-			n++
-			if up > upMax {
-				upMax = up
-			}
-			if down > downMax {
-				downMax = down
-			}
-			progress := elapsed / total
-			if progress > 1 {
-				progress = 1
-			}
-			runtime.EventsEmit(a.ctx, "speed", SpeedTick{
-				Up: up, Down: down, Progress: progress,
-				Elapsed: elapsed, Total: total,
-			})
-			pos := progress * float64(len(targets))
-			if idx := int(pos); idx < len(targets) {
-				runtime.EventsEmit(a.ctx, "speedNodeProgress", SpeedNodeProgressEvent{
-					ID:       targets[idx].ID,
-					Name:     targets[idx].Name,
-					Progress: math.Min(1, math.Max(0, pos-float64(idx))),
-				})
-			}
-			emitNodeDelays(int(pos))
-		}
-	}(runID)
 }
 
 // CancelSpeedTest 取消当前测速

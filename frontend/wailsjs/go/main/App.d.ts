@@ -8,6 +8,8 @@ export function CancelQZhuaLogin():Promise<void>;
 
 export function CancelSpeedTest():Promise<void>;
 
+export function CleanupBandwidth():Promise<void>;
+
 export function GetAutostart():Promise<boolean>;
 
 export function GetLocalIPs():Promise<Array<main.LocalIP>>;

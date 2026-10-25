@@ -105,6 +105,8 @@ type ChmlUser struct {
 	Integral      int    `json:"integral"`
 	UserImage     string `json:"userimg"`
 	RegisterTime  string `json:"regtime"`
+	// UserToken 旧版用户令牌，frpc 配置里的 user 字段用它（不是 OAuth access_token）
+	UserToken string `json:"usertoken"`
 }
 
 type userInfoResp struct {

@@ -116,6 +116,10 @@ func (a *App) HideToTray() {
 
 // QuitApp 供前端调用：真正退出程序（会关闭托盘）。
 func (a *App) QuitApp() {
+	// 让正在跑的测速收尾，并兜底杀掉 frpc / 删除临时隧道，避免残留进程与配额占用
+	atomic.AddInt64(&a.speedRun, 1)
+	atomic.AddInt64(&a.preferRun, 1)
+	a.CleanupBandwidth()
 	systray.Quit()
 	if a.ctx != nil {
 		runtime.Quit(a.ctx)

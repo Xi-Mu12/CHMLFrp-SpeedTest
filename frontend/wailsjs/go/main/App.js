@@ -14,6 +14,10 @@ export function CancelSpeedTest() {
   return window['go']['main']['App']['CancelSpeedTest']();
 }
 
+export function CleanupBandwidth() {
+  return window['go']['main']['App']['CleanupBandwidth']();
+}
+
 export function GetAutostart() {
   return window['go']['main']['App']['GetAutostart']();
 }

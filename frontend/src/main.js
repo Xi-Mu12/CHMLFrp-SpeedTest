@@ -19,7 +19,6 @@ const settings = {
 const selected = new Set(JSON.parse(localStorage.getItem('pickedNodeIds') || '[]'));
 const saveSel = () => localStorage.setItem('pickedNodeIds', JSON.stringify([...selected]));
 const bandwidthResults = new Map();
-let speedNodeId = null;
 
 // ---------- 导航 ----------
 document.querySelectorAll('.nav-item').forEach((btn) => {
@@ -455,6 +454,11 @@ const setSpeedRunning = (running) => {
 };
 EventsOn('speed', (ev) => {
     const sampleSecond = Math.floor(ev.elapsed);
+    if (ev.nodeName && $('currentSpeedNode')) {
+        $('currentSpeedNode').textContent = ev.nodeCount > 1 && ev.nodeIndex
+            ? `${ev.nodeName}（${ev.nodeIndex}/${ev.nodeCount}）`
+            : ev.nodeName;
+    }
     const shouldDrawSample = sampleSecond > lastSpeedSampleSecond;
     if (shouldDrawSample) {
         speedSamples.push({ up: ev.up, down: ev.down, t: sampleSecond });
@@ -470,6 +474,37 @@ EventsOn('speed', (ev) => {
     if ($('speedElapsed')) $('speedElapsed').textContent = `${ev.elapsed.toFixed(1)} / ${ev.total.toFixed(0)} 秒`;
     if (shouldDrawSample) drawSpeedChart();
 });
+EventsOn('speedLog', (ev) => {
+    appendSpeedLog(ev.level || 'info', ev.msg || '');
+});
+EventsOn('speedDownload', (ev) => {
+    if ($('speedProgress')) $('speedProgress').innerHTML = `${Math.round((ev.progress || 0) * 100)}<em>%</em>`;
+    $('bandwidthProgressFill').style.width = `${Math.round((ev.progress || 0) * 100)}%`;
+    if ($('speedElapsed')) $('speedElapsed').textContent = '正在下载 frpc…';
+});
+// 单节点完成：把该节点结果写进卡片与排行榜（多节点串行时逐个落地）
+EventsOn('speedNodeDone', (ev) => {
+    const key = String(ev.id);
+    setRing(key, 100);
+    if (ev.error) {
+        bandwidthResults.set(key, { ...(bandwidthResults.get(key) || {}), error: ev.error });
+        buildBandwidthGroups();
+        return;
+    }
+    bandwidthResults.set(key, {
+        ...(bandwidthResults.get(key) || {}),
+        delay: ev.delay || bandwidthResults.get(key)?.delay,
+        down: formatSpeed(ev.downAvg),
+        up: formatSpeed(ev.upAvg),
+        average: formatSpeed((ev.downAvg + ev.upAvg) / 2),
+        duration: String(ev.seconds || settings.secs),
+        error: '',
+    });
+    if (key !== '__last__') bandwidthResults.delete('__last__');
+    buildBandwidthGroups();
+    renderLeaderboard('bandwidthLeaderboard', 'bandwidthRankingList', 'bandwidthLeaderboardMeta', bandwidthRanking());
+    $('bandwidthLeaderboard')?.classList.remove('hidden');
+});
 EventsOn('speedDone', (ev) => {
     setSpeedRunning(false);
     if ($('speedDown')) $('speedDown').innerHTML = `${formatSpeed(ev.downAvg)}<em> Mbps</em>`;
@@ -482,17 +517,7 @@ EventsOn('speedDone', (ev) => {
     $('bandwidthProgressFill').style.width = ev.cancelled ? '0%' : '100%';
     $('speedElapsed').textContent = ev.cancelled ? '测速已停止' : '测速完成';
     $('currentSpeedNode').textContent = ev.cancelled ? '已停止' : '已完成';
-    if (!ev.cancelled && speedNodeId) {
-        bandwidthResults.set(speedNodeId, {
-            ...(bandwidthResults.get(speedNodeId) || {}),
-            down: formatSpeed(ev.downAvg),
-            up: formatSpeed(ev.upAvg),
-            average: formatSpeed((ev.downAvg + ev.upAvg) / 2),
-            duration: String(settings.secs),
-        });
-        if (speedNodeId !== '__last__') bandwidthResults.delete('__last__');
-        buildBandwidthGroups();
-    }
+    // 单节点结果由 speedNodeDone 落地，这里只负责整轮收尾
     if (ev.cancelled) $('bandwidthLeaderboard')?.classList.add('hidden');
     else renderLeaderboard('bandwidthLeaderboard', 'bandwidthRankingList', 'bandwidthLeaderboardMeta', bandwidthRanking());
     if (ev.cancelled) resetRings();
@@ -520,9 +545,8 @@ const startSpeedRun = async () => {
     $('bandwidthProgressFill').style.width = '0%';
     $('speedElapsed').textContent = '正在连接';
     const currentNode = nodes.find((node) => selected.has(String(node.id)));
-    speedNodeId = currentNode ? String(currentNode.id) : '__last__';
     $('currentSpeedNode').textContent = currentNode?.name || '当前测速任务';
-    appendSpeedLog('info', `开始测速：${currentNode?.name || '未选择节点'} · 时长 ${settings.secs}s · 地址 ${settings.addr}`);
+    appendSpeedLog('info', `开始测速：${currentNode?.name || '全部节点'} · 单节点 ${settings.secs}s · 每个节点会临时建隧道并启动 frpc`);
     $('bandwidthExportBtn').disabled = true;
     closeExportMenu('bandwidth');
     setSpeedRunning(true);
@@ -541,7 +565,8 @@ $('speedBtn').addEventListener('click', async () => {
     const count = selected.size || nodes.length;
     $('taskNodeCount').textContent = String(count);
     $('taskSecs').textContent = String(settings.secs);
-    $('taskEta').textContent = `约 ${count * settings.secs} 秒`;
+    // 每节点还要建隧道 + 起 frpc（约 5~10 秒），预估时长按“单节点时长 + 10 秒”算
+    $('taskEta').textContent = `约 ${count * (settings.secs + 10)} 秒`;
     $('speedTaskModal').classList.remove('hidden');
 });
 $('taskStartBtn').addEventListener('click', () => {
