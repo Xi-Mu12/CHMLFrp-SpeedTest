@@ -1,9 +1,15 @@
 import './style.css';
 import { GetNodes, StartPrefer, CancelPrefer, PausePrefer, ResumePrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, QuitApp, GetLocalIPs, GetMyIPInfo, QueryIPInfo } from '../wailsjs/go/main/App';
 import { EventsOn, WindowMinimise, WindowToggleMaximise, WindowGetPosition, WindowSetPosition, BrowserOpenURL } from '../wailsjs/runtime/runtime';
-import { StartQZhuaLogin, LogoutQZhua, CancelQZhuaLogin } from '../wailsjs/go/main/App';
+import { StartQZhuaLogin, LogoutQZhua, CancelQZhuaLogin, RestoreSession, SetRememberLogin } from '../wailsjs/go/main/App';
 
 const $ = (id) => document.getElementById(id);
+
+// 远端数据（节点名、接口错误串等）进 innerHTML 之前一律转义。
+// 节点名来自服务端接口，而页面里的脚本能直接调 Wails 绑定的后端方法，
+// 一旦拼进未转义的 HTML 就等于给自己开了一条 XSS 通道（<img onerror=...> 可执行）。
+const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ESC_MAP[ch]);
 
 // 弹窗必须位于页面根部，才能越过内容区的层叠上下文并遮住标题栏和侧栏。
 document.querySelectorAll('.bandwidth-modal').forEach((modal) => document.body.append(modal));
@@ -157,6 +163,10 @@ EventsOn('qzhuaAuth', (event) => {
             picture: event.picture,
         } }, event.apiError || '');
         $('loginModal').classList.add('hidden');
+        // 登录成功：撤掉节点区的登录引导，并真正去拉节点（未登录期间不展示卡片）
+        ensureLoginHint($('groups'));
+        ensureLoginHint($('bandwidthGroups'));
+        loadNodes();
         return;
     }
     qzhuaLoggedIn = false;
@@ -181,6 +191,8 @@ EventsOn('qzhuaAuth', (event) => {
     }
     $('accSubtitle').textContent = '点击登录';
     closeProfileModal();
+    // 退出登录/登录态失效：节点卡片一并收掉，回到登录引导
+    renderLoginOnly();
 });
 
 $('sideAccount').addEventListener('click', () => {
@@ -237,6 +249,17 @@ $('profileLogout').addEventListener('click', async () => {
 $('loginRegister').addEventListener('click', (e) => {
     e.preventDefault();
     BrowserOpenURL('https://account-api.qzhua.net/register');
+});
+
+// “保持登录状态”现在是真的：勾选才把令牌加密落盘，取消勾选会顺手删掉已存的凭据
+$('loginKeep').addEventListener('change', async (e) => {
+    try {
+        await SetRememberLogin(Boolean(e.target.checked));
+        appendLog('prefer', 'info', e.target.checked ? '已开启保持登录' : '已关闭保持登录，本地凭据已清除');
+    } catch (err) {
+        $('loginKeep').checked = !e.target.checked;
+        appendLog('prefer', 'err', '切换保持登录失败：' + err);
+    }
 });
 
 // ---------- 运行日志（延迟测速 + 带宽测速共用） ----------
@@ -329,6 +352,7 @@ let speedPaused = false;
 const speedSamples = [];
 let lastSpeedSampleSecond = -1;
 let bandwidthRunning = false;
+let speedStarting = false; // 已点击“开始测试”、请求尚未返回，挡住连点
 const formatSpeed = (value) => Number(value || 0).toFixed(1);
 const smoothPath = (points) => {
     if (points.length < 2) return '';
@@ -450,7 +474,6 @@ const setSpeedRunning = (running) => {
     $('speedCancelBtn').classList.toggle('hidden', !running);
     $('speedBtn').textContent = speedPaused ? '继续' : (running ? '暂停' : '开始测速');
     $('speedBtn').classList.toggle('speed-resume', speedPaused);
-    $('speedState').textContent = speedPaused ? '已暂停' : (running ? '测速中' : '待测速');
 };
 EventsOn('speed', (ev) => {
     const sampleSecond = Math.floor(ev.elapsed);
@@ -529,6 +552,14 @@ EventsOn('speedDone', (ev) => {
     const hasData = [...bandwidthResults.entries()].some(([k, r]) => k !== '__last__' && r && (r.delay !== undefined || r.down));
     $('bandwidthExportBtn').disabled = !hasData;
 });
+// 后端判定未登录 / 登录已过期（带宽测速要建临时隧道，没有令牌跑不了）
+EventsOn('speedNeedLogin', () => {
+    setSpeedRunning(false);
+    if ($('currentSpeedNode')) $('currentSpeedNode').textContent = '请先登录账号';
+    appendSpeedLog('warn', qzhuaLoggedIn ? '登录已过期，请重新登录 CHMLFrp' : '未登录：带宽测速需要在账号里创建临时隧道');
+    renderLoginOnly();
+    openLoginModal();
+});
 const startSpeedRun = async () => {
     speedSamples.length = 0;
     lastSpeedSampleSecond = -1;
@@ -550,7 +581,12 @@ const startSpeedRun = async () => {
     $('bandwidthExportBtn').disabled = true;
     closeExportMenu('bandwidth');
     setSpeedRunning(true);
-    await StartSpeedTest(settings.addr, settings.secs, selected.size ? [...selected].map(Number) : []);
+    speedStarting = true;
+    try {
+        await StartSpeedTest(settings.addr, settings.secs, selected.size ? [...selected].map(Number) : []);
+    } finally {
+        speedStarting = false;
+    }
 };
 $('speedBtn').addEventListener('click', async () => {
     if (speedRunning) {
@@ -559,6 +595,14 @@ $('speedBtn').addEventListener('click', async () => {
         else await ResumeSpeedTest();
         setSpeedRunning(true);
         appendSpeedLog('info', speedPaused ? '测速已暂停' : '测速已恢复');
+        return;
+    }
+    // 带宽测速必须登录（要建临时隧道），未登录时直接引导，不弹任务框
+    if (!qzhuaLoggedIn) {
+        if ($('currentSpeedNode')) $('currentSpeedNode').textContent = '请先登录账号';
+        appendSpeedLog('warn', '未登录：带宽测速需要登录账号后在服务端创建临时隧道');
+        renderLoginOnly();
+        openLoginModal();
         return;
     }
     // 静态确认弹窗：只显示一次性的任务信息，测速过程中不刷新
@@ -570,6 +614,8 @@ $('speedBtn').addEventListener('click', async () => {
     $('speedTaskModal').classList.remove('hidden');
 });
 $('taskStartBtn').addEventListener('click', () => {
+    // 连点会触发两轮并发测速，后端虽有兜底，前端也不该把请求发出去
+    if (speedStarting || speedRunning) return;
     $('speedTaskModal').classList.add('hidden');
     startSpeedRun();
 });
@@ -652,8 +698,8 @@ function preferCardHTML(n) {
             <span class="nc-id">#${n.id}</span>
             <span>${pill}</span>
         </div>
-        <div class="nc-name">${n.name}</div>
-        ${n.ip ? '<div class="nc-ip nc-id">IP ' + n.ip + '</div>' : ''}
+        <div class="nc-name">${esc(n.name)}</div>
+        ${n.ip ? '<div class="nc-ip nc-id">IP ' + esc(n.ip) + '</div>' : ''}
         <div class="prefer-metrics"><span>已发送 <b data-stat="sent">${sentText}</b></span><span>已接收 <b data-stat="recv">${recvText}</b></span><span>丢包率 <b data-stat="loss">${lossText}</b></span><span>平均延迟 <b data-delay-value class="${delayClass}" >${delayText}</b></span></div>
         <button class="prefer-detail-btn" type="button" data-prefer-id="${n.id}">详情</button>
     `;
@@ -670,7 +716,7 @@ function renderLeaderboard(boardId, listId, metaId, ranking) {
         return `
         <div class="ranking-item">
             <span class="ranking-rank">${index + 1}</span>
-            <div class="ranking-name">${item.name}<span class="ranking-region">${node ? regionLabel(node.china) : '节点'} · #${item.id}</span></div>
+            <div class="ranking-name">${esc(item.name)}<span class="ranking-region">${node ? regionLabel(node.china) : '节点'} · #${item.id}</span></div>
             <span class="ranking-delay">${item.delay}<small> ms</small></span>
         </div>`;
     };
@@ -704,7 +750,7 @@ function bandwidthCardHTML(n) {
     const pill = n.group === 'vip' ? '<span class="pill vip">VIP</span>' : '<span class="pill user">普通</span>';
     const result = bandwidthResults.get(String(n.id));
     const d = result?.delay;
-    return `<div class="nc-top"><span class="nc-id">#${n.id}</span><span>${pill}</span></div><div class="nc-name">${n.name}</div><div class="bandwidth-metrics"><span>延迟 <b data-bandwidth-delay="${n.id}" class="${d === undefined ? '' : `delay-value ${delayTone(d)}`}">${d === undefined ? '--' : `${d}ms`}</b></span><span>下载 <b>${result?.down ?? '--'}</b></span><span>上传 <b>${result?.up ?? '--'}</b></span></div><svg class="nc-ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="nc-ring-track" cx="18" cy="18" r="15.9" pathLength="100"/><circle class="nc-ring-fg" data-ring="${n.id}" cx="18" cy="18" r="15.9" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/></svg><button class="node-detail-btn" type="button" data-test-id="${n.id}">详情</button>`;
+    return `<div class="nc-top"><span class="nc-id">#${n.id}</span><span>${pill}</span></div><div class="nc-name">${esc(n.name)}</div><div class="bandwidth-metrics"><span>延迟 <b data-bandwidth-delay="${n.id}" class="${d === undefined ? '' : `delay-value ${delayTone(d)}`}">${d === undefined ? '--' : `${d}ms`}</b></span><span>下载 <b>${result?.down ?? '--'}</b></span><span>上传 <b>${result?.up ?? '--'}</b></span></div><svg class="nc-ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="nc-ring-track" cx="18" cy="18" r="15.9" pathLength="100"/><circle class="nc-ring-fg" data-ring="${n.id}" cx="18" cy="18" r="15.9" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/></svg><button class="node-detail-btn" type="button" data-test-id="${n.id}">详情</button>`;
 }
 
 function setRing(id, pct) {
@@ -727,7 +773,6 @@ function buildGroups() {
         (currentFilter === 'all' || n.group === currentFilter) && nodeMatchesQuery(n, preferNodeQuery)
     );
     $('totalNodes').textContent = nodes.length || '--';
-    $('selectedNodes').textContent = selected.size;
     $('filterCount').textContent = `${visibleNodes.length} 个节点`;
     const groups = [
         { key: 'vip', title: '会员节点', list: visibleNodes.filter((n) => n.group === 'vip') },
@@ -764,6 +809,7 @@ function buildGroups() {
         });
         wrap.appendChild(el);
     }
+    ensureLoginHint(wrap);
     updateSelUI();
     buildBandwidthGroups();
 }
@@ -777,7 +823,6 @@ function buildBandwidthGroups() {
         (filter === 'all' || n.group === filter) && nodeMatchesQuery(n, bandwidthNodeQuery)
     );
     $('bandwidthTotal').textContent = nodes.length || '--';
-    $('bandwidthSelected').textContent = selected.size;
     $('bandwidthFilterCount').textContent = `${visibleNodes.length} 个节点`;
     $('bandwidthSelectAllBtn').textContent = isAllSelected() ? '取消全选' : '全选';
     const groups = [
@@ -808,6 +853,7 @@ function buildBandwidthGroups() {
         });
         wrap.appendChild(el);
     }
+    ensureLoginHint(wrap);
 }
 
 function showBandwidthDetail(node) {
@@ -844,15 +890,13 @@ function isAllSelected() {
 
 function updateSelUI() {
     $('selectAllBtn').textContent = isAllSelected() ? '取消全选' : '全选';
-    $('selectedNodes').textContent = selected.size;
-    if ($('bandwidthSelected')) $('bandwidthSelected').textContent = selected.size;
     if (preferRunning) return;
     if (selected.size === 0) {
         $('preferStatus').textContent = '点击卡片选择节点';
     } else if (selected.size === 1) {
         const id = [...selected][0];
         const n = nodes.find((x) => String(x.id) === id);
-        $('preferStatus').innerHTML = `已选节点：<b>#${id} ${n ? n.name : ''}</b>`;
+        $('preferStatus').innerHTML = `已选节点：<b>#${id} ${esc(n ? n.name : '')}</b>`;
     } else {
         $('preferStatus').innerHTML = `已选 <b>${selected.size}</b> 个节点`;
     }
@@ -882,24 +926,94 @@ $('selectAllBtn').addEventListener('click', () => {
 
 const cardById = (id) => document.querySelector(`.node-card[data-id="${id}"]`);
 
-async function loadNodes() {
-    $('groups').innerHTML = '<div class="empty-state"><span class="loader"></span><b>正在加载节点</b><small>请稍候</small></div>';
-    $('bandwidthGroups').innerHTML = '<div class="empty-state"><span class="loader"></span><b>正在加载节点</b><small>请稍候</small></div>';
-    $('preferStatus').textContent = '节点加载中…';
-    try {
-        nodes = await GetNodes('all');
-    } catch (err) {
-        $('groups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${err}</small></div>`;
-        $('bandwidthGroups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${err}</small></div>`;
-        $('preferStatus').textContent = '节点拉取失败';
+// ---------- 未登录引导 ----------
+// 未登录时 /nodeinfo 拿不到节点真实 IP，延迟与带宽测速都跑不起来。
+// 这里在节点区顶部放一张可点击的引导卡（等同点左侧账户卡片），登录成功后自动消失。
+function makeLoginHint() {
+    const el = document.createElement('div');
+    el.className = 'login-required';
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.innerHTML = `
+        <span class="login-required-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.7 7-5.7s7 2.1 7 5.7"/></svg></span>
+        <b>点击左侧头像登录账号</b>
+        <small>登录后才能获取节点真实 IP，延迟测速与带宽测速都依赖账号权限</small>`;
+    const open = () => openLoginModal();
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            open();
+        }
+    });
+    return el;
+}
+
+function ensureLoginHint(container) {
+    if (!container) return;
+    const existed = container.querySelector('.login-required');
+    if (qzhuaLoggedIn) {
+        existed?.remove();
         return;
     }
-    // 清理已不存在的选中 id
-    const valid = new Set(nodes.map((n) => String(n.id)));
-    let pruned = false;
-    for (const id of [...selected]) if (!valid.has(id)) { selected.delete(id); pruned = true; }
-    if (pruned) saveSel();
-    buildGroups();
+    if (!existed) container.prepend(makeLoginHint());
+}
+
+// 未登录：清空节点数据，只留一张登录引导卡。
+// 未登录时 /nodeinfo 拿不到节点真实 IP，卡片摆出来既点不了也测不了，纯属误导。
+function renderLoginOnly() {
+    if (qzhuaLoggedIn) return;
+    nodes = [];
+    results.clear();
+    preferStats.clear();
+    bandwidthResults.clear();
+    ['totalNodes', 'bandwidthTotal'].forEach((id) => { if ($(id)) $(id).textContent = '--'; });
+    ['filterCount', 'bandwidthFilterCount'].forEach((id) => { if ($(id)) $(id).textContent = '0 个节点'; });
+    if ($('preferStatus')) $('preferStatus').textContent = '请先登录账号';
+    if ($('currentSpeedNode')) $('currentSpeedNode').textContent = '请先登录账号';
+    // 没有数据就没有可导出的内容
+    if ($('preferExportBtn')) $('preferExportBtn').disabled = true;
+    if ($('bandwidthExportBtn')) $('bandwidthExportBtn').disabled = true;
+    ['groups', 'bandwidthGroups'].forEach((id) => {
+        const box = $(id);
+        if (!box) return;
+        box.innerHTML = '';
+        box.appendChild(makeLoginHint());
+    });
+}
+
+let nodesLoading = false;
+async function loadNodes() {
+    // 未登录直接走引导分支，不发请求、不渲染卡片
+    if (!qzhuaLoggedIn) {
+        renderLoginOnly();
+        return;
+    }
+    if (nodesLoading) return;
+    nodesLoading = true;
+    try {
+        $('groups').innerHTML = '<div class="empty-state"><span class="loader"></span><b>正在加载节点</b><small>请稍候</small></div>';
+        $('bandwidthGroups').innerHTML = '<div class="empty-state"><span class="loader"></span><b>正在加载节点</b><small>请稍候</small></div>';
+        $('preferStatus').textContent = '节点加载中…';
+        try {
+            nodes = await GetNodes('all');
+        } catch (err) {
+            $('groups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${esc(err)}</small></div>`;
+            $('bandwidthGroups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${esc(err)}</small></div>`;
+            $('preferStatus').textContent = '节点拉取失败';
+            ensureLoginHint($('groups'));
+            ensureLoginHint($('bandwidthGroups'));
+            return;
+        }
+        // 清理已不存在的选中 id
+        const valid = new Set(nodes.map((n) => String(n.id)));
+        let pruned = false;
+        for (const id of [...selected]) if (!valid.has(id)) { selected.delete(id); pruned = true; }
+        if (pruned) saveSel();
+        buildGroups();
+    } finally {
+        nodesLoading = false;
+    }
 }
 
 document.querySelectorAll('#view-speed .filter').forEach((button) => {
@@ -929,11 +1043,19 @@ $('bandwidthNodeSearch').addEventListener('input', (event) => {
 
 $('refreshBtn').addEventListener('click', () => {
     if (preferRunning) return;
+    if (!qzhuaLoggedIn) {
+        openLoginModal();
+        return;
+    }
     results.clear();
     loadNodes();
 });
 $('bandwidthRefreshBtn').addEventListener('click', () => {
     if (bandwidthRunning) return;
+    if (!qzhuaLoggedIn) {
+        openLoginModal();
+        return;
+    }
     loadNodes();
 });
 $('bandwidthSelectAllBtn').addEventListener('click', () => {
@@ -985,8 +1107,6 @@ EventsOn('preferEvent', (ev) => {
             $('preferExportBtn').disabled = true;
             closeExportMenu('prefer');
             $('preferStatus').textContent = '准备测速';
-            $('runState').textContent = '测试中';
-            $('runStateHint').textContent = `0 / ${ev.total} 个节点`;
             $('preferProgressFill').style.width = '0%';
             appendLog('prefer', 'info', `开始测速 · 共 ${ev.total} 个节点`);
             break;
@@ -1003,9 +1123,6 @@ EventsOn('preferEvent', (ev) => {
             results.set(ev.nodeId, ev.delay);
             preferStats.set(ev.nodeId, { sent: ev.sent, recv: ev.recv, loss: ev.loss, port: ev.port });
             $('preferProgressFill').style.width = `${Math.round(ev.index / ev.total * 100)}%`;
-            // 暂停时仍可能有已在途的探测结果回来，别把「已暂停」冲掉
-            if (!preferPaused) $('runState').textContent = '测试中';
-            $('runStateHint').textContent = `${ev.index} / ${ev.total} 个节点`;
             $('preferStatus').textContent = `${ev.name} · ${ev.delay < 0 ? '超时' : `${ev.delay}ms`}`;
             const card = cardById(ev.nodeId);
             if (card) {
@@ -1025,12 +1142,6 @@ EventsOn('preferEvent', (ev) => {
                 setStat('loss', `${Math.round(ev.loss * 100)}%`);
             }
             if (ev.delay >= 0) {
-                if (!$('bestDelay').textContent || $('bestDelay').textContent === '-- ms') {
-                    $('bestDelay').innerHTML = `${ev.delay}<em> ms</em>`;
-                } else {
-                    const current = parseFloat($('bestDelay').textContent);
-                    if (!Number.isNaN(current) && ev.delay < current) $('bestDelay').innerHTML = `${ev.delay}<em> ms</em>`;
-                }
                 appendLog('prefer', 'ok', `#${ev.nodeId} ${ev.name} · 延迟 ${ev.delay}ms · 端口 ${ev.port}`);
             } else {
                 appendLog('prefer', 'err', `#${ev.nodeId} ${ev.name} · 超时（7000/80/81 端口均不可达，节点可能未运行 frps）`);
@@ -1052,18 +1163,42 @@ EventsOn('preferEvent', (ev) => {
                 buildGroups();
                 const best = ev.result[0];
                 $('preferStatus').innerHTML =
-                `测速完成 · 最快：<b>#${best.id} ${best.name}</b> <span class="ok">${best.delay}ms</span> · 共 ${ev.total} 个节点`;
-                $('bestDelay').innerHTML = `${best.delay}<em> ms</em>`;
+                `测速完成 · 最快：<b>#${best.id} ${esc(best.name)}</b> <span class="ok">${best.delay}ms</span> · 共 ${ev.total} 个节点`;
                 appendLog('prefer', 'ok', `测速完成 · ${ev.result.length}/${ev.total} 个节点可用 · 最快 #${best.id} ${best.name} ${best.delay}ms`);
             } else {
                 $('preferStatus').textContent = '测速完成';
                 appendLog('prefer', 'warn', `测速完成 · ${ev.total} 个节点全部超时，无可用结果`);
             }
-            $('runState').textContent = '已完成';
-            $('runStateHint').textContent = `已测试 ${ev.total} 个节点`;
             $('preferProgressFill').style.width = '100%';
             break;
         }
+
+        case 'needLogin':
+            // 后端确认拿不到节点 IP 且未登录：这不是“取消”，要引导去登录
+            preferRunning = false;
+            preferPaused = false;
+            setPreferBtn(false);
+            $('refreshBtn').disabled = false;
+            $('preferExportBtn').disabled = false;
+            document.querySelectorAll('.node-card.testing').forEach((c) => c.classList.remove('testing'));
+            $('preferStatus').textContent = '请先登录账号';
+            $('preferProgressFill').style.width = '0%';
+            appendLog('prefer', 'warn', '未登录：延迟测速需要登录后获取节点真实 IP');
+            renderLoginOnly();
+            openLoginModal();
+            break;
+
+        case 'error':
+            preferRunning = false;
+            preferPaused = false;
+            setPreferBtn(false);
+            $('refreshBtn').disabled = false;
+            $('preferExportBtn').disabled = false;
+            document.querySelectorAll('.node-card.testing').forEach((c) => c.classList.remove('testing'));
+            $('preferStatus').textContent = '测速无法开始';
+            $('preferProgressFill').style.width = '0%';
+            appendLog('prefer', 'err', ev.name || '测速无法开始');
+            break;
 
         case 'cancel':
             preferRunning = false;
@@ -1073,8 +1208,6 @@ EventsOn('preferEvent', (ev) => {
             $('preferExportBtn').disabled = false;
             document.querySelectorAll('.node-card.testing').forEach((c) => c.classList.remove('testing'));
             $('preferStatus').textContent = '测速已取消';
-            $('runState').textContent = '已取消';
-            $('runStateHint').textContent = '可以重新开始测速';
             $('preferProgressFill').style.width = '0%';
             appendLog('prefer', 'warn', '测速已取消');
             break;
@@ -1087,9 +1220,15 @@ $('preferBtn').addEventListener('click', async () => {
         if (preferPaused) await PausePrefer();
         else await ResumePrefer();
         setPreferBtn(true);
-        $('runState').textContent = preferPaused ? '已暂停' : '测试中';
         $('preferStatus').textContent = preferPaused ? '已暂停，点击「继续」恢复' : '已恢复，继续测速';
         appendLog('prefer', 'info', preferPaused ? '测速已暂停' : '测速已恢复');
+        return;
+    }
+    if (!qzhuaLoggedIn) {
+        $('preferStatus').textContent = '请先登录账号';
+        appendLog('prefer', 'warn', '未登录：延迟测速需要登录后获取节点真实 IP');
+        renderLoginOnly();
+        openLoginModal();
         return;
     }
     if (!nodes.length) return;
@@ -1132,7 +1271,7 @@ const exportPreferCsv = async () => {
     ).join('\r\n');
     try {
         const path = await SaveCSV(csv);
-        if (path) $('preferStatus').innerHTML = `已导出：<b>${path}</b>`;
+        if (path) $('preferStatus').innerHTML = `已导出：<b>${esc(path)}</b>`;
     } catch (err) {
         $('preferStatus').textContent = '导出失败：' + err;
     }
@@ -1213,7 +1352,7 @@ const exportPreferPng = async () => {
     }
     try {
         const path = await SaveImage(canvas.toDataURL('image/png').split(',')[1]);
-        if (path) $('preferStatus').innerHTML = `已导出：<b>${path}</b>`;
+        if (path) $('preferStatus').innerHTML = `已导出：<b>${esc(path)}</b>`;
     } catch (err) {
         $('preferStatus').textContent = '导出失败：' + err;
     }
@@ -1229,7 +1368,7 @@ function renderNodesTable() {
         const delayCell = d === undefined ? '--' : (d < 0 ? '超时' : `${d} ms`);
         return `
         <tr>
-            <td>#${n.id}</td><td>${n.name}</td><td>${n.area || '-'}</td>
+            <td>#${n.id}</td><td>${esc(n.name)}</td><td>${esc(n.area || '-')}</td>
             <td><span class="pill ${n.group === 'vip' ? 'vip' : 'user'}">${n.group === 'vip' ? '会员' : '普通'}</span></td>
             <td>${regionLabel(n.china)}</td><td><span class="pill ok">可用</span></td>
             <td>${delayCell}</td><td>待测速</td>
@@ -1279,9 +1418,13 @@ const exportBandwidthCsv = async () => {
     if (rows.length <= 1) return;
     try {
         const path = await SaveCSV(toCsvText(rows));
-        if (path) $('speedState').textContent = '已导出 CSV';
+        if (path) {
+            $('currentSpeedNode').textContent = `已导出：${path}`;
+            appendLog('bandwidth', 'ok', `已导出 CSV · ${path}`);
+        }
     } catch (err) {
-        $('speedState').textContent = '导出失败';
+        $('currentSpeedNode').textContent = '导出失败';
+        appendLog('bandwidth', 'err', `导出 CSV 失败 · ${err}`);
     }
 };
 
@@ -1362,9 +1505,13 @@ const exportBandwidthPng = async () => {
     }
     try {
         const path = await SaveImage(canvas.toDataURL('image/png').split(',')[1]);
-        if (path) $('speedState').textContent = '已导出图片';
+        if (path) {
+            $('currentSpeedNode').textContent = `已导出：${path}`;
+            appendLog('bandwidth', 'ok', `已导出图片 · ${path}`);
+        }
     } catch (err) {
-        $('speedState').textContent = '导出失败';
+        $('currentSpeedNode').textContent = '导出失败';
+        appendLog('bandwidth', 'err', `导出图片失败 · ${err}`);
     }
 };
 
@@ -1517,8 +1664,8 @@ function renderLocalIPs(ips) {
     list.innerHTML = ips.map((x) => {
         const canLookup = ipLookupable(x);
         return `
-        <div class="ip-row" data-ip="${x.ip}" data-lookup="${canLookup ? '1' : '0'}">
-            <div class="ip-main"><b>${x.ip}</b><small>${x.iface} · IPv${x.version}</small></div>
+        <div class="ip-row" data-ip="${esc(x.ip)}" data-lookup="${canLookup ? '1' : '0'}">
+            <div class="ip-main"><b>${esc(x.ip)}</b><small>${esc(x.iface)} · IPv${x.version}</small></div>
             <span class="ip-tag ${ipTagClass(x)}">${ipTagText(x)}</span>
             <div class="ip-actions">
                 <button class="ip-btn copy" type="button">复制</button>
@@ -1548,7 +1695,7 @@ async function refreshLocalIPs() {
     try {
         renderLocalIPs(await GetLocalIPs());
     } catch (err) {
-        $('localIpList').innerHTML = `<div class="empty-state compact"><b>读取网卡失败</b><small>${String(err)}</small></div>`;
+        $('localIpList').innerHTML = `<div class="empty-state compact"><b>读取网卡失败</b><small>${esc(err)}</small></div>`;
     }
 }
 
@@ -1572,14 +1719,14 @@ function renderIPGeo(geo, self) {
         ['时区', geo.timeZone || '--'],
         ['经纬度', coord],
     ];
-    const badge = geo.country ? `<span class="ip-badge">${geo.country}</span>` : '';
+    const badge = geo.country ? `<span class="ip-badge">${esc(geo.country)}</span>` : '';
     card.className = 'ip-geo has-data';
     card.innerHTML = `
         <div class="ip-geo-head">
-            <div class="ip-geo-title"><b>${geo.ip}</b>${badge}</div>
-            <div class="ip-geo-sub"><span>${place}</span><span class="ip-geo-kind">IPv${geo.version || 4}${self ? ' · 当前出口' : ' · 指定查询'}</span></div>
+            <div class="ip-geo-title"><b>${esc(geo.ip)}</b>${badge}</div>
+            <div class="ip-geo-sub"><span>${esc(place)}</span><span class="ip-geo-kind">IPv${geo.version || 4}${self ? ' · 当前出口' : ' · 指定查询'}</span></div>
         </div>
-        <div class="ip-geo-grid">${cells.map(([k, v, extra]) => `<div><span>${k}</span><b>${v}</b>${extra ? `<em>${extra}</em>` : ''}</div>`).join('')}</div>
+        <div class="ip-geo-grid">${cells.map(([k, v, extra]) => `<div><span>${k}</span><b>${esc(v)}</b>${extra ? `<em>${esc(extra)}</em>` : ''}</div>`).join('')}</div>
         <p class="ip-geo-note">数据来源 ip-api.com · 免密钥，约 45 次/分钟 · 中文结果</p>`;
     $('myIpBackBtn').classList.toggle('hidden', self);
 }
@@ -1587,13 +1734,13 @@ function renderIPGeo(geo, self) {
 function renderIPGeoLoading(text) {
     const card = $('ipInfoCard');
     card.className = 'ip-geo is-loading';
-    card.innerHTML = `<div class="ip-geo-empty"><span class="loader"></span><b>${text}</b></div>`;
+    card.innerHTML = `<div class="ip-geo-empty"><span class="loader"></span><b>${esc(text)}</b></div>`;
 }
 
 function renderIPGeoError(title, msg) {
     const card = $('ipInfoCard');
     card.className = 'ip-geo has-error';
-    card.innerHTML = `<div class="ip-geo-empty"><b>${title}</b><small>${msg}</small></div>`;
+    card.innerHTML = `<div class="ip-geo-empty"><b>${esc(title)}</b><small>${esc(msg)}</small></div>`;
 }
 
 const stripErr = (err) => String(err).replace(/^Error:\s*/, '');
@@ -1657,4 +1804,28 @@ GetAutostart().then((on) => { $('setAutostart').checked = on; }).catch((err) => 
     $('setAutostart').disabled = true;
     $('autostartHint').textContent = String(err);
 });
-loadNodes();
+
+// 先恢复登录态（过期会自动用 refresh_token 续期），再拉节点。
+// 未登录时 /node 仍能拉到节点，但拿不到真实 IP，界面顶部会显示登录引导。
+async function bootstrap() {
+    let state = null;
+    try {
+        state = await RestoreSession();
+    } catch (err) {
+        appendLog('prefer', 'warn', '恢复登录态失败：' + err);
+    }
+    if (state) {
+        qzhuaLoggedIn = Boolean(state.loggedIn);
+        $('loginKeep').checked = state.remember !== false;
+        if (state.loggedIn && $('accTitle').textContent === '未登录') {
+            // 兜底：万一 logged_in 事件早于监听器到达，用快照把侧栏补上
+            setText('accTitle', state.username || '轻爪用户');
+            setText('accSubtitle', state.email || '已登录');
+            $('sideAccount').classList.add('logged-in');
+            setAvatar($('accAvatar'), state.picture || '', (state.username || '?').slice(0, 1));
+        }
+    }
+    if (!qzhuaLoggedIn) renderLoginOnly();
+    await loadNodes();
+}
+bootstrap();

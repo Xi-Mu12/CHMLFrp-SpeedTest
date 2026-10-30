@@ -2,6 +2,12 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8"/>
+    <!--
+      CSP：脚本只允许本地打包产物（Wails 注入的 /wails/*.js 同源），
+      内联 <script> 与 onclick= 之类的事件处理器一律拒绝；
+      头像/横幅要加载远程 https 图片，所以 img-src 放开 https:。
+    -->
+    <meta content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ws: wss: http: https:; object-src 'none'; base-uri 'none'" http-equiv="Content-Security-Policy"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
     <title>ChmlfrpSpeedTest</title>
 </head>
@@ -30,7 +36,7 @@
 
     <main class="content">
         <section id="view-speed" class="view active">
-            <header class="compact-head"><div><h1>延迟测速</h1><p>TCPing 测各节点延迟与丢包，秒级出结果</p></div><div class="compact-stats"><span>节点 <b id="totalNodes">--</b></span><span>已选 <b id="selectedNodes">0</b></span><span>最佳 <b id="bestDelay">--<em> ms</em></b></span><span id="runState">待测速</span><small id="runStateHint" class="hidden">准备开始测速</small></div><div class="toolbar"><button id="refreshBtn" class="tool-btn"><span>↻</span>刷新</button><div class="export-menu" id="preferExportMenu"><button id="preferExportBtn" class="tool-btn" type="button" aria-haspopup="true" aria-expanded="false"><span>↓</span>导出<em>▾</em></button><div class="export-dropdown hidden" id="preferExportDropdown"><button type="button" data-export="csv">导出 CSV</button><button type="button" data-export="png">导出图片</button></div></div></div></header>
+            <header class="compact-head"><div><h1>延迟测速</h1><p>TCPing 测各节点延迟与丢包，秒级出结果</p></div><div class="compact-stats"><span>节点 <b id="totalNodes">--</b></span></div><div class="toolbar"><button id="refreshBtn" class="tool-btn"><span>↻</span>刷新</button><div class="export-menu" id="preferExportMenu"><button id="preferExportBtn" class="tool-btn" type="button" aria-haspopup="true" aria-expanded="false"><span>↓</span>导出<em>▾</em></button><div class="export-dropdown hidden" id="preferExportDropdown"><button type="button" data-export="csv">导出 CSV</button><button type="button" data-export="png">导出图片</button></div></div></div></header>
             <div class="filter-row"><span class="filter-caption">按节点组筛选</span><button class="filter active" data-filter="all">全部</button><button class="filter" data-filter="vip">会员节点</button><button class="filter" data-filter="user">普通节点</button><label class="node-search"><span>⌕</span><input id="preferNodeSearch" type="search" placeholder="搜索节点名称或编号" autocomplete="off"></label><span class="filter-count" id="filterCount">-- 个节点</span></div>
             <div class="view-scroll">
                 <section id="preferLeaderboard" class="prefer-leaderboard hidden" aria-live="polite">
@@ -49,7 +55,7 @@
         </section>
 
         <section id="view-bandwidth" class="view">
-            <header class="compact-head"><div><h1>带宽测速</h1><p>选择节点后开始测速</p></div><div class="compact-stats"><span>节点 <b id="bandwidthTotal">--</b></span><span>已选 <b id="bandwidthSelected">0</b></span><span id="speedState">待测速</span></div><div class="toolbar"><button id="bandwidthRefreshBtn" class="tool-btn"><span>↻</span>刷新</button><div class="export-menu" id="bandwidthExportMenu"><button id="bandwidthExportBtn" class="tool-btn" type="button" disabled aria-haspopup="true" aria-expanded="false"><span>↓</span>导出<em>▾</em></button><div class="export-dropdown hidden" id="bandwidthExportDropdown"><button type="button" data-export="csv">导出 CSV</button><button type="button" data-export="png">导出图片</button></div></div></div></header>
+            <header class="compact-head"><div><h1>带宽测速</h1><p>选择节点后开始测速</p></div><div class="compact-stats"><span>节点 <b id="bandwidthTotal">--</b></span></div><div class="toolbar"><button id="bandwidthRefreshBtn" class="tool-btn"><span>↻</span>刷新</button><div class="export-menu" id="bandwidthExportMenu"><button id="bandwidthExportBtn" class="tool-btn" type="button" disabled aria-haspopup="true" aria-expanded="false"><span>↓</span>导出<em>▾</em></button><div class="export-dropdown hidden" id="bandwidthExportDropdown"><button type="button" data-export="csv">导出 CSV</button><button type="button" data-export="png">导出图片</button></div></div></div></header>
             <div class="filter-row bandwidth-filters"><span class="filter-caption">按节点组筛选</span><button class="filter bandwidth-filter active" data-filter="all">全部</button><button class="filter bandwidth-filter" data-filter="vip">会员节点</button><button class="filter bandwidth-filter" data-filter="user">普通节点</button><label class="node-search"><span>⌕</span><input id="bandwidthNodeSearch" type="search" placeholder="搜索节点名称或编号" autocomplete="off"></label><span class="filter-count" id="bandwidthFilterCount">-- 个节点</span></div>
             <div class="view-scroll">
                 <section id="bandwidthLeaderboard" class="prefer-leaderboard hidden" aria-live="polite">
@@ -127,7 +133,7 @@
                 <div id="loginError" class="login-error hidden"></div>
                 <div id="loginStep1">
                     <button id="loginAuthBtn" class="login-primary">授权登录</button>
-                    <label class="login-keep"><input type="checkbox" checked/>保持登录状态</label>
+                    <label class="login-keep"><input type="checkbox" id="loginKeep" checked/>保持登录状态</label>
                     <div class="login-footer">还没有账号？<a href="#" id="loginRegister">立即注册</a></div>
                 </div>
                 <div id="loginStep2" class="hidden">
