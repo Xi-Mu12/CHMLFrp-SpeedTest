@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -76,5 +78,60 @@ func TestFrpcPlatformName(t *testing.T) {
 	t.Logf("当前平台 frpc: %s", name)
 	if name == "" {
 		t.Fatal("平台名称为空")
+	}
+}
+
+// TestSessionSealRoundtrip 登录态加解密往返（Windows 走 DPAPI，其他平台透传）
+func TestSessionSealRoundtrip(t *testing.T) {
+	plain := []byte(`{"access_token":"a.b.c","refresh_token":"r.e.f","expires_at":1767225600}`)
+	sealed, err := sealBytes(plain)
+	if err != nil {
+		t.Fatalf("加密失败: %v", err)
+	}
+	back, err := openBytes(sealed)
+	if err != nil {
+		t.Fatalf("解密失败: %v", err)
+	}
+	if !bytes.Equal(back, plain) {
+		t.Fatalf("往返数据不一致:\n got %s\nwant %s", back, plain)
+	}
+	if runtime.GOOS == "windows" && bytes.Equal(sealed, plain) {
+		t.Fatal("Windows 上登录态未被加密")
+	}
+}
+
+// TestSessionFileRoundtrip 落盘/读取往返（写到真实配置目录，用独立文件名避免污染）
+func TestSessionFileRoundtrip(t *testing.T) {
+	path, err := sessionFilePath()
+	if err != nil {
+		t.Skipf("无法定位配置目录: %v", err)
+	}
+	backup, backupErr := os.ReadFile(path)
+	t.Cleanup(func() {
+		if backupErr == nil {
+			_ = os.WriteFile(path, backup, 0o600)
+			return
+		}
+		_ = os.Remove(path)
+	})
+	_ = os.Remove(path)
+
+	want := authSession{
+		AccessToken: "access-1", RefreshToken: "refresh-1",
+		ExpiresAt: 1767225600, Username: "tester", Email: "t@example.com",
+	}
+	if err := saveSession(want); err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+	got, err := loadSession()
+	if err != nil {
+		t.Fatalf("读取失败: %v", err)
+	}
+	if got != want {
+		t.Fatalf("往返不一致:\n got %+v\nwant %+v", got, want)
+	}
+	removeSessionFile()
+	if _, err := loadSession(); err == nil {
+		t.Fatal("删除后仍能读到登录态")
 	}
 }
