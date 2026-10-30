@@ -154,7 +154,7 @@ func (a *App) StartQZhuaLogin() (QZhuaLoginStart, error) {
 		return QZhuaLoginStart{}, fmt.Errorf("未配置 QZhua client_id，请设置 QZHUA_CLIENT_ID")
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	config, err := fetchQZhuaOIDC(client)
+	config, err := a.oidcConfig(client)
 	if err != nil {
 		return QZhuaLoginStart{}, err
 	}
@@ -329,9 +329,15 @@ func pollQZhuaDeviceTokenOnce(ctx context.Context, client *http.Client, config q
 
 // completeQZhuaLogin 用已取得的 access_token 拉取用户资料并完成登录。
 func (a *App) completeQZhuaLogin(ctx context.Context, client *http.Client, config qzhuaOIDCConfig, token qzhuaToken) {
+	a.applyLogin(ctx, client, config.UserinfoEndpoint, token)
+}
+
+// applyLogin 登录收尾：拉资料 → 落内存 → 持久化 → 通知前端。
+// OAuth 与静默恢复（RestoreSession）共用这段逻辑。
+func (a *App) applyLogin(ctx context.Context, client *http.Client, userinfoEndpoint string, token qzhuaToken) {
 	// 设备码流程的令牌只带 chmlfrp_api scope，OIDC userinfo 可能因缺少 openid
 	// 而拒绝访问。此时退化为只用 CHMLFrp 账户资料（官方启动器同样只取后者）。
-	user, userErr := fetchQZhuaUser(ctx, client, config.UserinfoEndpoint, token.AccessToken)
+	user, userErr := fetchQZhuaUser(ctx, client, userinfoEndpoint, token.AccessToken)
 
 	// OAuth 登录成功后，继续用同一个 access_token 获取 CHMLFrp 账户资料。
 	// 即使该接口暂时不可用，也不应让已经完成的 OAuth 登录失败；前端会显示
@@ -360,8 +366,14 @@ func (a *App) completeQZhuaLogin(ctx context.Context, client *http.Client, confi
 	a.authMu.Lock()
 	a.qzhuaUser = user
 	a.qzhuaToken = token.AccessToken
+	if token.RefreshToken != "" {
+		a.refreshToken = token.RefreshToken
+	}
+	a.authExpiry = tokenExpiryFrom(token.ExpiresIn)
 	a.chmlUser = profile.Chml
 	a.authMu.Unlock()
+
+	a.persistSession(token, user)
 	a.emitAuth(qzhuaAuthEvent{
 		Status:   "logged_in",
 		Username: qzhuaUserName(user),
@@ -425,7 +437,265 @@ func (a *App) LogoutQZhua() {
 	a.authMu.Lock()
 	a.qzhuaUser = qzhuaUser{}
 	a.qzhuaToken = ""
+	a.refreshToken = ""
+	a.authExpiry = time.Time{}
 	a.chmlUser = nil
 	a.authMu.Unlock()
+	// 主动退出时连本地持久化一起清掉，否则下次启动会被静默恢复回来
+	removeSessionFile()
 	a.emitAuth(qzhuaAuthEvent{Status: "logged_out"})
+}
+
+// ---------- 令牌缓存 / 续期 / 登录态持久化 ----------
+
+// oidcConfig 拉取并缓存 OIDC 端点。well-known 文档几乎不变，
+// 缓存 10 分钟即可，避免每次登录/续期都多一次请求。
+func (a *App) oidcConfig(client *http.Client) (qzhuaOIDCConfig, error) {
+	a.authMu.Lock()
+	cfg, at := a.oidc, a.oidcAt
+	a.authMu.Unlock()
+	if cfg.TokenEndpoint != "" && time.Since(at) < 10*time.Minute {
+		return cfg, nil
+	}
+	fresh, err := fetchQZhuaOIDC(client)
+	if err != nil {
+		if cfg.TokenEndpoint != "" {
+			return cfg, nil // 拿不到新文档时先用旧的，别把登录直接卡死
+		}
+		return cfg, err
+	}
+	a.authMu.Lock()
+	a.oidc = fresh
+	a.oidcAt = time.Now()
+	a.authMu.Unlock()
+	return fresh, nil
+}
+
+// requestQZhuaRefreshToken 用 refresh_token 换新的 access_token（RFC 6749 §6）。
+func requestQZhuaRefreshToken(client *http.Client, endpoint, clientID, refreshToken string) (qzhuaToken, error) {
+	var token qzhuaToken
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+		"client_id":     {clientID},
+	}
+	resp, err := client.PostForm(endpoint, form)
+	if err != nil {
+		return token, fmt.Errorf("续期请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	if resp.StatusCode/100 != 2 {
+		return token, fmt.Errorf("续期失败(%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if err := json.Unmarshal(body, &token); err != nil || token.AccessToken == "" {
+		return token, fmt.Errorf("续期响应缺少 access_token")
+	}
+	return token, nil
+}
+
+// refreshAccessToken 串行刷新令牌；并发调用时等锁的人直接复用结果。
+func (a *App) refreshAccessToken() (string, error) {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+
+	a.authMu.Lock()
+	current, refresh, expiry, remember := a.qzhuaToken, a.refreshToken, a.authExpiry, a.authRemember
+	user := a.qzhuaUser
+	a.authMu.Unlock()
+
+	// 等锁期间别的协程可能已经续期成功，别重复打接口
+	if current != "" && !expiry.IsZero() && time.Now().Before(expiry.Add(-time.Minute)) {
+		return current, nil
+	}
+	if strings.TrimSpace(refresh) == "" {
+		return "", fmt.Errorf("没有可用的刷新令牌")
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	cfg, err := a.oidcConfig(client)
+	if err != nil {
+		return "", err
+	}
+	tok, err := requestQZhuaRefreshToken(client, cfg.TokenEndpoint, qzhuaClientIDValue(), refresh)
+	if err != nil {
+		return "", err
+	}
+
+	a.authMu.Lock()
+	a.qzhuaToken = tok.AccessToken
+	if tok.RefreshToken != "" {
+		a.refreshToken = tok.RefreshToken
+	}
+	a.authExpiry = tokenExpiryFrom(tok.ExpiresIn)
+	latest := authSession{
+		AccessToken:  a.qzhuaToken,
+		RefreshToken: a.refreshToken,
+		ExpiresAt:    a.authExpiry.Unix(),
+		Username:     qzhuaUserName(user),
+		Email:        user.Email,
+		Picture:      qzhuaUserPicture(user),
+	}
+	a.authMu.Unlock()
+
+	if remember {
+		_ = saveSession(latest) // 续期失败写盘失败不影响本次调用
+	}
+	return tok.AccessToken, nil
+}
+
+// currentToken 取当前可用的 access_token：临近过期就先续期。
+// 所有需要鉴权的调用都从这里拿 token，这样 401 大多在发生前就被消掉了。
+func (a *App) currentToken() string {
+	a.authMu.Lock()
+	token, refresh, expiry := a.qzhuaToken, a.refreshToken, a.authExpiry
+	a.authMu.Unlock()
+
+	if token == "" {
+		return ""
+	}
+	if refresh == "" || expiry.IsZero() || time.Now().Before(expiry.Add(-2*time.Minute)) {
+		return token
+	}
+	if fresh, err := a.refreshAccessToken(); err == nil {
+		return fresh
+	}
+	return token // 续期失败就先用旧的，让调用方拿到真实的 401
+}
+
+// persistSession 按“记住登录”开关决定是否把登录态写盘。
+func (a *App) persistSession(tok qzhuaToken, user qzhuaUser) {
+	a.authMu.Lock()
+	remember := a.authRemember
+	session := authSession{
+		AccessToken:  tok.AccessToken,
+		RefreshToken: a.refreshToken,
+		ExpiresAt:    a.authExpiry.Unix(),
+		Username:     qzhuaUserName(user),
+		Email:        user.Email,
+		Picture:      qzhuaUserPicture(user),
+	}
+	a.authMu.Unlock()
+
+	if !remember {
+		removeSessionFile()
+		return
+	}
+	_ = saveSession(session)
+}
+
+// sessionState 汇总当前登录态给前端（不含令牌）。
+func (a *App) sessionState() SessionState {
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+	name := qzhuaUserName(a.qzhuaUser)
+	if a.qzhuaUser == (qzhuaUser{}) {
+		name = ""
+	}
+	return SessionState{
+		LoggedIn: a.qzhuaToken != "",
+		Remember: a.authRemember,
+		Username: name,
+		Email:    a.qzhuaUser.Email,
+		Picture:  qzhuaUserPicture(a.qzhuaUser),
+	}
+}
+
+// GetSessionState 前端启动时读取登录态快照（不触发网络请求）。
+func (a *App) GetSessionState() SessionState {
+	return a.sessionState()
+}
+
+// SetRememberLogin 切换“保持登录状态”。
+// 关闭时立刻删除已落盘的凭据，避免用户以为没记住、实际还留着。
+func (a *App) SetRememberLogin(remember bool) {
+	a.authMu.Lock()
+	a.authRemember = remember
+	token, refresh := a.qzhuaToken, a.refreshToken
+	expiry := a.authExpiry
+	user := a.qzhuaUser
+	a.authMu.Unlock()
+
+	if !remember {
+		removeSessionFile()
+		return
+	}
+	if token == "" {
+		return
+	}
+	_ = saveSession(authSession{
+		AccessToken:  token,
+		RefreshToken: refresh,
+		ExpiresAt:    expiry.Unix(),
+		Username:     qzhuaUserName(user),
+		Email:        user.Email,
+		Picture:      qzhuaUserPicture(user),
+	})
+}
+
+// RestoreSession 启动时静默恢复登录态：
+// 未过期直接复用 access_token，过期则用 refresh_token 续期；都失败就清掉本地记录。
+// 返回给前端的快照，同时（ctx 就绪时）补发一次 logged_in 事件让界面切到已登录。
+func (a *App) RestoreSession() SessionState {
+	sess, err := loadSession()
+	if err != nil {
+		if a.qzhuaToken != "" {
+			return a.sessionState()
+		}
+		return a.sessionState()
+	}
+
+	a.authMu.Lock()
+	a.refreshToken = sess.RefreshToken
+	if a.qzhuaUser.Username == "" && a.qzhuaUser.Email == "" {
+		a.qzhuaUser = qzhuaUser{Username: sess.Username, Email: sess.Email, Picture: sess.Picture}
+	}
+	a.authMu.Unlock()
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	// 先把 token 装回去，续期逻辑与 sessionState 都依赖它
+	if sess.AccessToken != "" && (sess.ExpiresAt == 0 || time.Now().Unix() < sess.ExpiresAt) {
+		a.authMu.Lock()
+		a.qzhuaToken = sess.AccessToken
+		if sess.ExpiresAt > 0 {
+			a.authExpiry = time.Unix(sess.ExpiresAt, 0)
+		}
+		a.authMu.Unlock()
+	} else {
+		if _, rerr := a.refreshAccessToken(); rerr != nil {
+			removeSessionFile()
+			a.authMu.Lock()
+			a.qzhuaToken = ""
+			a.refreshToken = ""
+			a.authExpiry = time.Time{}
+			a.chmlUser = nil
+			a.authMu.Unlock()
+			return a.sessionState()
+		}
+	}
+
+	token := a.currentToken()
+	if token == "" {
+		removeSessionFile()
+		return a.sessionState()
+	}
+
+	// 资料拉取失败不影响“已登录”，前端会显示缓存的用户名/头像
+	cfg, cfgErr := a.oidcConfig(client)
+	if cfgErr != nil {
+		return a.sessionState()
+	}
+	a.authMu.Lock()
+	expiry := a.authExpiry
+	a.authMu.Unlock()
+	expiresIn := 0
+	if !expiry.IsZero() {
+		expiresIn = int(time.Until(expiry).Seconds())
+	}
+	a.applyLogin(context.Background(), client, cfg.UserinfoEndpoint, qzhuaToken{
+		AccessToken:  token,
+		RefreshToken: sess.RefreshToken,
+		ExpiresIn:    expiresIn,
+	})
+	return a.sessionState()
 }

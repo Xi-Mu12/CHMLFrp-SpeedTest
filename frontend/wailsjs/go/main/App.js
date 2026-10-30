@@ -34,6 +34,10 @@ export function GetNodes(arg1) {
   return window['go']['main']['App']['GetNodes'](arg1);
 }
 
+export function GetSessionState() {
+  return window['go']['main']['App']['GetSessionState']();
+}
+
 export function HideToTray() {
   return window['go']['main']['App']['HideToTray']();
 }
@@ -58,6 +62,10 @@ export function QuitApp() {
   return window['go']['main']['App']['QuitApp']();
 }
 
+export function RestoreSession() {
+  return window['go']['main']['App']['RestoreSession']();
+}
+
 export function ResumePrefer() {
   return window['go']['main']['App']['ResumePrefer']();
 }
@@ -76,6 +84,10 @@ export function SaveImage(arg1) {
 
 export function SetAutostart(arg1) {
   return window['go']['main']['App']['SetAutostart'](arg1);
+}
+
+export function SetRememberLogin(arg1) {
+  return window['go']['main']['App']['SetRememberLogin'](arg1);
 }
 
 export function StartPrefer(arg1) {

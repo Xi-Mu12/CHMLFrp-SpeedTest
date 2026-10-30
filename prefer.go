@@ -169,7 +169,9 @@ func (a *App) StartPrefer(ids []int) {
 		// 2. FetchNodes 拿节点列表（含 ID/China/Name，免 Token）
 		nodes, err := FetchNodes()
 		if err != nil {
-			runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
+			}
 			return
 		}
 
@@ -190,9 +192,8 @@ func (a *App) StartPrefer(ids []int) {
 
 		// 官方启动器使用带 Bearer access_token 的 /nodeinfo 获取真实 IP。
 		// 未登录或接口暂时不可用时，兼容旧版桌面 IP 列表文件。
-		a.authMu.Lock()
-		token := a.qzhuaToken
-		a.authMu.Unlock()
+		// 走 currentToken：过期会自动续期，避免拿旧令牌把所有节点都测成“不可达”。
+		token := a.currentToken()
 		ipByName := FetchNodeIPs(sel, token)
 		if raws, fileErr := parseChmlIPList(preferIPListPath); fileErr == nil {
 			for _, r := range raws {
@@ -212,7 +213,20 @@ func (a *App) StartPrefer(ids []int) {
 			targets = append(targets, preferTarget{ID: n.ID, Name: n.Name, China: n.China, IP: ip})
 		}
 		if len(targets) == 0 {
-			runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
+			if a.ctx != nil {
+				// 未登录拿不到节点真实 IP：这属于“需要登录”，不是“取消”，
+				// 前端要显示登录引导而不是一句莫名其妙的“测速已取消”。
+				switch {
+				case strings.TrimSpace(token) == "":
+					runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "needLogin"})
+				default:
+					// 已登录却一个 IP 都没拿到：不是取消，把原因说清楚
+					runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{
+						Kind: "error",
+						Name: "已登录，但没能取到任何节点的真实 IP。可能是登录已过期或节点接口暂时不可用，请重新登录后再试。",
+					})
+				}
+			}
 			return
 		}
 		total := len(targets)

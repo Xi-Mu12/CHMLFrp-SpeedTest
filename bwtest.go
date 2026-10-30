@@ -93,20 +93,26 @@ func (a *App) speedCancelled(runID int64) bool {
 	return atomic.LoadInt64(&a.speedRun) != runID
 }
 
-func (a *App) currentToken() string {
-	a.authMu.Lock()
-	defer a.authMu.Unlock()
-	return a.qzhuaToken
-}
-
 // StartSpeedTest 开始带宽测速（签名保持不变：addr 仅用于日志展示，真实目标由节点决定）
 func (a *App) StartSpeedTest(addr string, seconds int, ids []int) {
 	if seconds <= 0 || seconds > 120 {
 		seconds = 10
 	}
+	// 防重入：连点“开始测试”会让两轮同时建隧道、起 frpc，而 bwProc/bwTunnelID
+	// 只有单槽，后一轮会覆盖前一轮 → 旧的 frpc 杀不掉、临时隧道残留吃账号配额。
+	if !atomic.CompareAndSwapInt32(&a.bwBusy, 0, 1) {
+		a.emitSpeedLog("warn", "已有带宽测速任务在运行，请先停止或等它结束后再开始")
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "speedDone", SpeedDone{Addr: addr, Cancelled: true})
+		}
+		return
+	}
 	runID := atomic.AddInt64(&a.speedRun, 1)
 	atomic.StoreInt32(&a.speedPaused, 0)
-	go a.runBandwidthTest(runID, addr, seconds, ids)
+	go func() {
+		defer atomic.StoreInt32(&a.bwBusy, 0)
+		a.runBandwidthTest(runID, addr, seconds, ids)
+	}()
 }
 
 // runBandwidthTest 整轮流程：登录校验 → 准备 frpc → 逐节点测速 → 汇总
@@ -120,12 +126,23 @@ func (a *App) runBandwidthTest(runID int64, addr string, seconds int, ids []int)
 
 	token := a.currentToken()
 	if strings.TrimSpace(token) == "" {
+		// 单发一个 dedicated 事件，前端据此弹出登录引导（而不是只显示“测速已停止”）
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "speedNeedLogin")
+		}
 		fail("未登录：带宽测速需要在账号里创建临时隧道，请先登录 CHMLFrp")
 		return
 	}
 	a.emitSpeedLog("info", "校验账号信息…")
 	user, err := FetchUserInfo(token)
 	if err != nil {
+		if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "403") {
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, "speedNeedLogin")
+			}
+			fail("登录已过期，请重新登录 CHMLFrp")
+			return
+		}
 		fail("获取账号信息失败：" + err.Error())
 		return
 	}
@@ -186,6 +203,8 @@ func (a *App) runBandwidthTest(runID int64, addr string, seconds int, ids []int)
 			cancelled = true
 			break
 		}
+		// 多节点 × 数十秒可能跨过 access_token 有效期，每个节点重新取一次（必要时自动续期）
+		token = a.currentToken()
 		res := a.testNodeBandwidth(runID, token, user.UserToken, frpcBin, srv, n, i, len(sel), seconds)
 		if a.speedCancelled(runID) {
 			cancelled = true

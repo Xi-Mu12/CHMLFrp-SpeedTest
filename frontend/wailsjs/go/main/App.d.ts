@@ -18,6 +18,8 @@ export function GetMyIPInfo():Promise<main.IPGeo>;
 
 export function GetNodes(arg1:string):Promise<Array<main.NodeItem>>;
 
+export function GetSessionState():Promise<main.SessionState>;
+
 export function HideToTray():Promise<void>;
 
 export function LogoutQZhua():Promise<void>;
@@ -30,6 +32,8 @@ export function QueryIPInfo(arg1:string):Promise<main.IPGeo>;
 
 export function QuitApp():Promise<void>;
 
+export function RestoreSession():Promise<main.SessionState>;
+
 export function ResumePrefer():Promise<void>;
 
 export function ResumeSpeedTest():Promise<void>;
@@ -39,6 +43,8 @@ export function SaveCSV(arg1:string):Promise<string>;
 export function SaveImage(arg1:string):Promise<string>;
 
 export function SetAutostart(arg1:boolean):Promise<void>;
+
+export function SetRememberLogin(arg1:boolean):Promise<void>;
 
 export function StartPrefer(arg1:Array<number>):Promise<void>;
 

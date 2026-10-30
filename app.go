@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -17,11 +18,21 @@ type App struct {
 	ctx          context.Context
 	speedRun     int64 // 测速轮次 id，+1 即取消上一轮
 	speedPaused  int32
+	bwBusy       int32 // 带宽测速占用标志：0 空闲 / 1 正在跑，防止重复进入
 	preferRun    int64 // 延迟测速轮次 id，+1 即取消
 	preferPaused int32
+
+	// 登录态。authMu 保护下面这些字段，refreshMu 只用于串行化令牌续期，
+	// 分开是为了避免「续期中又去读 token」时自锁。
 	authMu       sync.Mutex
+	refreshMu    sync.Mutex
 	qzhuaUser    qzhuaUser
 	qzhuaToken   string
+	refreshToken string
+	authExpiry   time.Time
+	authRemember bool // 是否把登录态持久化（对应登录框的“保持登录状态”）
+	oidc         qzhuaOIDCConfig
+	oidcAt       time.Time
 	chmlUser     *ChmlUser
 	authCancel   context.CancelFunc
 
@@ -34,7 +45,8 @@ type App struct {
 
 // NewApp 创建 App 应用结构体
 func NewApp() *App {
-	return &App{}
+	// 默认记住登录：绝大多数用户不希望每次启动都重新授权。
+	return &App{authRemember: true}
 }
 
 // startup 在应用启动时调用，保存 context 以便调用运行时方法
@@ -62,9 +74,8 @@ func (a *App) GetNodes(group string) ([]NodeItem, error) {
 		return nil, err
 	}
 	filtered := FilterNodesByGroup(nodes, group)
-	a.authMu.Lock()
-	token := a.qzhuaToken
-	a.authMu.Unlock()
+	// 走 currentToken：令牌快过期时会先静默续期，否则这里拿不到节点 IP 又没有任何提示
+	token := a.currentToken()
 	ipByName := FetchNodeIPs(filtered, token)
 	out := make([]NodeItem, 0, len(filtered))
 	for _, n := range filtered {

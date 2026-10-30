@@ -100,6 +100,26 @@ export namespace main {
 	        this.expiresIn = source["expiresIn"];
 	    }
 	}
+	export class SessionState {
+	    loggedIn: boolean;
+	    remember: boolean;
+	    username: string;
+	    email: string;
+	    picture: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.loggedIn = source["loggedIn"];
+	        this.remember = source["remember"];
+	        this.username = source["username"];
+	        this.email = source["email"];
+	        this.picture = source["picture"];
+	    }
+	}
 
 }
 
