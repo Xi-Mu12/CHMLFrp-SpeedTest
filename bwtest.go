@@ -38,9 +38,10 @@ import (
 const (
 	bwRemotePortMin = 20000
 	bwRemotePortMax = 60000
-	// bwParallel 单方向并发连接数：单连接在长 RTT 下容易被窗口限制，
-	// 4 条并发能更接近真实可用带宽。
-	bwParallel     = 4
+	// bwParallel 单方向并发连接数。单条 TCP 在长 RTT 下容易被接收窗口限住，
+	// 需要多条并发才能打满链路。分时测量后同一时刻只跑一个方向，
+	// 比原来双向各 4 条时更有余量，所以提到 6 条。
+	bwParallel     = 6
 	bwChunkSize    = 128 * 1024
 	bwTickInterval = 100 * time.Millisecond
 	bwDialTimeout  = 8 * time.Second
@@ -407,7 +408,7 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 		}
 	}
 
-	a.emitSpeedLog("info", fmt.Sprintf("#%d %s · 开始打流 %d 秒 → %s", node.ID, node.Name, seconds, target))
+	a.emitSpeedLog("info", fmt.Sprintf("#%d %s · 开始打流 %d 秒（下行/上行分时各半，前段预热不计入）→ %s", node.ID, node.Name, seconds, target))
 	dAvg, uAvg, dPeak, uPeak, cancelled, err := a.runThroughput(runID, node, idx, total, seconds, target)
 	if err != nil {
 		res.Error = err.Error()
@@ -424,9 +425,51 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 	return res
 }
 
-// runThroughput 双向打流，逐 tick 上报速率。支持暂停（暂停时断开连接、冻结计时）。
+// 打流方向
+const (
+	bwModeDown = "DN"
+	bwModeUp   = "UP"
+)
+
+// phaseResult 单个方向的打流结果
+type phaseResult struct {
+	avg  float64 // 平均速率 Mbps（已剔除预热段）
+	peak float64 // 峰值速率 Mbps（只统计预热之后）
+}
+
+// runThroughput 分阶段打流：先下行，再上行。
+//
+// 为什么不双向同时打：frpc 隧道和节点出口是同一份带宽，4 条下行 + 4 条上行并发时
+// 两个方向互相挤占，测出来的单向上限会明显偏低。分时测量才接近真实可用带宽。
+//
+// 每段前 20%（至少 500ms）作为预热丢弃：TCP 慢启动 + frp 建链在这段时间还没到稳态，
+// 计入平均会把结果压得偏低。预热期间仍然上报瞬时速率，曲线不断档。
 func (a *App) runThroughput(runID int64, node NodeBasic, idx, total, seconds int, target string) (downAvg, upAvg, downPeak, upPeak float64, cancelled bool, err error) {
-	var downBytes, upBytes int64
+	// 总时长对半分给两个方向，保证用户设置的“单节点时长”不变
+	perDir := time.Duration(seconds) * time.Second / 2
+	if perDir < 2*time.Second {
+		perDir = 2 * time.Second
+	}
+	warmup := perDir / 5
+	if warmup < 500*time.Millisecond {
+		warmup = 500 * time.Millisecond
+	}
+
+	down, cancelled, err := a.runPhase(runID, node, idx, total, bwModeDown, seconds, perDir, warmup, 0, target)
+	if err != nil || cancelled {
+		return 0, 0, 0, 0, cancelled, err
+	}
+	up, cancelled, err := a.runPhase(runID, node, idx, total, bwModeUp, seconds, perDir, warmup, 0.5, target)
+	if err != nil || cancelled {
+		return 0, 0, 0, 0, cancelled, err
+	}
+	return down.avg, up.avg, down.peak, up.peak, false, nil
+}
+
+// runPhase 跑单个方向的打流。fracBase 是该阶段在“单节点总时长”里的起点（下行 0、上行 0.5）。
+func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string, totalSeconds int, dur, warmup time.Duration, fracBase float64, target string) (phaseResult, bool, error) {
+	var res phaseResult
+	var bytes int64
 	stopCh := make(chan struct{})
 	var stopOnce sync.Once
 	var mu sync.Mutex
@@ -444,14 +487,16 @@ func (a *App) runThroughput(runID int64, node NodeBasic, idx, total, seconds int
 		wg.Wait()
 	}
 
+	// 关闭连接 + 停 worker，取消与正常结束共用
+	shutdown := func() {
+		stopOnce.Do(func() { close(stopCh) })
+		closeAll()
+	}
+
 	startWorkers := func(remaining time.Duration) {
-		for i := 0; i < bwParallel*2; i++ {
-			mode := "DN"
-			if i >= bwParallel {
-				mode = "UP"
-			}
+		for i := 0; i < bwParallel; i++ {
 			wg.Add(1)
-			go func(mode string) {
+			go func() {
 				defer wg.Done()
 				conn, derr := net.DialTimeout("tcp", target, bwDialTimeout)
 				if derr != nil {
@@ -477,10 +522,10 @@ func (a *App) runThroughput(runID int64, node NodeBasic, idx, total, seconds int
 						return
 					default:
 					}
-					if mode == "DN" {
+					if mode == bwModeDown {
 						n, rerr := conn.Read(buf)
 						if n > 0 {
-							atomic.AddInt64(&downBytes, int64(n))
+							atomic.AddInt64(&bytes, int64(n))
 						}
 						if rerr != nil {
 							return
@@ -488,27 +533,27 @@ func (a *App) runThroughput(runID int64, node NodeBasic, idx, total, seconds int
 					} else {
 						n, werr := conn.Write(buf)
 						if n > 0 {
-							atomic.AddInt64(&upBytes, int64(n))
+							atomic.AddInt64(&bytes, int64(n))
 						}
 						if werr != nil {
 							return
 						}
 					}
 				}
-			}(mode)
+			}()
 		}
 	}
 
-	totalDur := time.Duration(seconds) * time.Second
 	started := time.Now()
 	var pausedFor time.Duration
-	var runSeconds float64
-	var lastDown, lastUp int64
+	var lastBytes int64
+	// measuredFrom < 0 表示还没跨过预热；跨过时定格当时的字节数作为平均值基线
+	var measuredFrom int64 = -1
 
 	for {
 		if a.speedCancelled(runID) {
-			cancelled = true
-			break
+			shutdown()
+			return res, true, nil
 		}
 		if atomic.LoadInt32(&a.speedPaused) == 1 {
 			if workers {
@@ -523,62 +568,74 @@ func (a *App) runThroughput(runID int64, node NodeBasic, idx, total, seconds int
 			continue
 		}
 		elapsed := time.Since(started) - pausedFor
-		if elapsed >= totalDur {
+		if elapsed >= dur {
 			break
 		}
 		if !workers {
-			startWorkers(totalDur - elapsed)
+			startWorkers(dur - elapsed)
 			workers = true
 		}
 		time.Sleep(bwTickInterval)
 
 		elapsed = time.Since(started) - pausedFor
-		if elapsed > totalDur {
-			elapsed = totalDur
+		if elapsed > dur {
+			elapsed = dur
 		}
-		runSeconds = elapsed.Seconds()
-		d := atomic.LoadInt64(&downBytes)
-		u := atomic.LoadInt64(&upBytes)
-		dd := float64(d-lastDown) * 8 / 1e6 / bwTickInterval.Seconds()
-		du := float64(u-lastUp) * 8 / 1e6 / bwTickInterval.Seconds()
-		lastDown, lastUp = d, u
-		if dd < 0 {
-			dd = 0
+		cur := atomic.LoadInt64(&bytes)
+		if measuredFrom < 0 && elapsed >= warmup {
+			measuredFrom = cur
 		}
-		if du < 0 {
-			du = 0
+		instant := float64(cur-lastBytes) * 8 / 1e6 / bwTickInterval.Seconds()
+		lastBytes = cur
+		if instant < 0 {
+			instant = 0
 		}
-		if dd > downPeak {
-			downPeak = dd
+		// 峰值只认预热之后的稳态值
+		if measuredFrom >= 0 && instant > res.peak {
+			res.peak = instant
 		}
-		if du > upPeak {
-			upPeak = du
+
+		// 只有当前方向有值，另一个方向补 0：曲线上能直接看出“先下行再上行”
+		downRate, upRate := 0.0, 0.0
+		if mode == bwModeDown {
+			downRate = instant
+		} else {
+			upRate = instant
 		}
-		frac := runSeconds / float64(seconds)
-		if frac > 1 {
-			frac = 1
+		nodeFrac := fracBase + elapsed.Seconds()/float64(totalSeconds)
+		if nodeFrac > 1 {
+			nodeFrac = 1
 		}
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "speed", SpeedTick{
-				Up: du, Down: dd,
-				Progress: (float64(idx) + frac) / float64(total),
-				Elapsed:  float64(idx)*float64(seconds) + runSeconds,
-				Total:    float64(total) * float64(seconds),
+				Up: upRate, Down: downRate,
+				Progress: (float64(idx) + nodeFrac) / float64(total),
+				Elapsed:  (float64(idx) + nodeFrac) * float64(totalSeconds),
+				Total:    float64(total) * float64(totalSeconds),
 				NodeID:   node.ID, NodeName: node.Name,
-				NodeIndex: idx + 1, NodeCount: total, Phase: "test",
+				NodeIndex: idx + 1, NodeCount: total, Phase: mode,
 			})
 		}
-		a.emitNodeProgress(node, 0.22+0.78*frac)
+		a.emitNodeProgress(node, 0.22+0.78*nodeFrac)
 	}
 
-	stopOnce.Do(func() { close(stopCh) })
-	closeAll()
-	if runSeconds <= 0.2 {
-		runSeconds = 0.2
+	shutdown()
+
+	finalElapsed := time.Since(started) - pausedFor
+	if finalElapsed > dur {
+		finalElapsed = dur
 	}
-	downAvg = float64(atomic.LoadInt64(&downBytes)) * 8 / 1e6 / runSeconds
-	upAvg = float64(atomic.LoadInt64(&upBytes)) * 8 / 1e6 / runSeconds
-	return
+	if measuredFrom < 0 {
+		// 阶段短到没跨过预热：退化为全段统计，别把结果算成 0
+		measuredFrom = 0
+	}
+	measuredBytes := atomic.LoadInt64(&bytes) - measuredFrom
+	measuredDur := finalElapsed - warmup
+	if measuredDur < 200*time.Millisecond {
+		measuredDur = 200 * time.Millisecond
+	}
+	res.avg = float64(measuredBytes) * 8 / 1e6 / measuredDur.Seconds()
+	return res, false, nil
 }
 
 // deleteTunnelWithRetry 删除临时隧道，失败重试几次（frpc 刚杀，服务端状态可能滞后）

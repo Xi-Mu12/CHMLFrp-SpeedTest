@@ -12,7 +12,7 @@ import (
 )
 
 // TestBWServerThroughput 不经过隧道，直接对本地数据源打流，
-// 验证 DN/UP 协议、双向计数与平均速率计算（回环带宽应远高于 50Mbps）。
+// 验证分时打流（先下行再上行）、预热剔除与平均速率计算（回环带宽应远高于 50Mbps）。
 func TestBWServerThroughput(t *testing.T) {
 	srv, err := startBWServer()
 	if err != nil {
@@ -35,8 +35,9 @@ func TestBWServerThroughput(t *testing.T) {
 	if down < 50 || up < 50 {
 		t.Fatalf("回环带宽异常偏低: down=%.1f up=%.1f", down, up)
 	}
-	if elapsed < 1900*time.Millisecond {
-		t.Fatalf("测试时长不足: %v", elapsed)
+	// 分时测量：2 秒的配置会被拆成下行 2s + 上行 2s（每段有 2s 下限）
+	if elapsed < 3900*time.Millisecond {
+		t.Fatalf("测试时长不足（应跑完上下行两段）: %v", elapsed)
 	}
 }
 

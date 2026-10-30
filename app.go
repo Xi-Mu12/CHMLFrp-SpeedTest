@@ -106,7 +106,7 @@ type SpeedTick struct {
 	NodeName  string `json:"nodeName"`
 	NodeIndex int    `json:"nodeIndex"`
 	NodeCount int    `json:"nodeCount"`
-	Phase     string `json:"phase"` // prepare / test
+	Phase     string `json:"phase"` // prepare / DN（下行）/ UP（上行）
 }
 
 // SpeedDone 单次测速汇总
