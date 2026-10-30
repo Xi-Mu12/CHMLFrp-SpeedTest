@@ -408,7 +408,7 @@ const ensureChartHover = (chart) => {
         dotDown.style.top = `${data.downY[idx]}%`;
         dotUp.style.left = `${x}%`;
         dotUp.style.top = `${data.upY[idx]}%`;
-        tip.innerHTML = `<div class="ct-title">第 ${item.t} 秒</div><div class="ct-row"><i class="ct-dot down"></i>下载 ${formatSpeed(item.down)} Mbps</div><div class="ct-row"><i class="ct-dot up"></i>上传 ${formatSpeed(item.up)} Mbps</div>`;
+        tip.innerHTML = `<div class="ct-title">第 ${item.t} 秒</div><div class="ct-row"><i class="ct-dot down"></i>下载 ${item.phase === 'UP' ? '—' : `${formatSpeed(item.down)} Mbps`}</div><div class="ct-row"><i class="ct-dot up"></i>上传 ${item.phase === 'DN' ? '—' : `${formatSpeed(item.up)} Mbps`}</div>`;
         tip.classList.remove('hidden');
         const tipW = 140;
         let left = e.clientX - rect.left + 14;
@@ -452,11 +452,17 @@ const drawSpeedChart = () => {
         const downPath = smoothPath(downPts);
         const upPath = smoothPath(upPts);
         const gid = `speed${++chartSeq}`;
+        // 曲线颜色取自 CSS 变量：暗色主题是浅色描边，亮色主题换成深色，
+        // 否则白底上这条 #e8eaed 的线基本看不见。
+        const cssVars = getComputedStyle(document.documentElement);
+        const chartColor = (name, fallback) => (cssVars.getPropertyValue(name).trim() || fallback);
+        const downColor = chartColor('--chart-down', '#e8eaed');
+        const upColor = chartColor('--chart-up', '#8b939e');
         const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         svg.setAttribute('class', 'speed-curve');
         svg.setAttribute('viewBox', '0 0 100 100');
         svg.setAttribute('preserveAspectRatio', 'none');
-        svg.innerHTML = `<defs><linearGradient id="${gid}Down" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e8eaed" stop-opacity=".20"/><stop offset="1" stop-color="#e8eaed" stop-opacity="0"/></linearGradient><linearGradient id="${gid}Up" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b939e" stop-opacity=".16"/><stop offset="1" stop-color="#8b939e" stop-opacity="0"/></linearGradient></defs><path d="${downPath} L 100 100 L 0 100 Z" fill="url(#${gid}Down)"/><path d="${upPath} L 100 100 L 0 100 Z" fill="url(#${gid}Up)"/><path d="${upPath}" fill="none" stroke="#8b939e" stroke-width="1.4" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/><path d="${downPath}" fill="none" stroke="#e8eaed" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/>`;
+        svg.innerHTML = `<defs><linearGradient id="${gid}Down" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${downColor}" stop-opacity=".20"/><stop offset="1" stop-color="${downColor}" stop-opacity="0"/></linearGradient><linearGradient id="${gid}Up" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${upColor}" stop-opacity=".16"/><stop offset="1" stop-color="${upColor}" stop-opacity="0"/></linearGradient></defs><path d="${downPath} L 100 100 L 0 100 Z" fill="url(#${gid}Down)"/><path d="${upPath} L 100 100 L 0 100 Z" fill="url(#${gid}Up)"/><path d="${upPath}" fill="none" stroke="${upColor}" stroke-width="1.4" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/><path d="${downPath}" fill="none" stroke="${downColor}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/>`;
         svg.chartData = {
             list,
             x: downPts.map((p) => p[0]),
@@ -484,17 +490,23 @@ EventsOn('speed', (ev) => {
     }
     const shouldDrawSample = sampleSecond > lastSpeedSampleSecond;
     if (shouldDrawSample) {
-        speedSamples.push({ up: ev.up, down: ev.down, t: sampleSecond });
+        speedSamples.push({ up: ev.up, down: ev.down, t: sampleSecond, phase: ev.phase });
         if (speedSamples.length > 60) speedSamples.shift();
         lastSpeedSampleSecond = sampleSecond;
     }
-    if ($('speedDown')) $('speedDown').innerHTML = `${formatSpeed(ev.down)}<em> Mbps</em>`;
-    if ($('speedUp')) $('speedUp').innerHTML = `${formatSpeed(ev.up)}<em> Mbps</em>`;
-    if ($('detailDown')) $('detailDown').textContent = `${formatSpeed(ev.down)} Mbps`;
-    if ($('detailUp')) $('detailUp').textContent = `${formatSpeed(ev.up)} Mbps`;
+    // 分时测量：当前阶段只测一个方向，另一方向没有数据，别把面板数字刷成 0
+    if (ev.phase !== 'UP' && $('speedDown')) $('speedDown').innerHTML = `${formatSpeed(ev.down)}<em> Mbps</em>`;
+    if (ev.phase !== 'DN' && $('speedUp')) $('speedUp').innerHTML = `${formatSpeed(ev.up)}<em> Mbps</em>`;
+    if (ev.phase !== 'UP' && $('detailDown')) $('detailDown').textContent = `${formatSpeed(ev.down)} Mbps`;
+    if (ev.phase !== 'DN' && $('detailUp')) $('detailUp').textContent = `${formatSpeed(ev.up)} Mbps`;
     if ($('speedProgress')) $('speedProgress').innerHTML = `${Math.round(ev.progress * 100)}<em>%</em>`;
     $('bandwidthProgressFill').style.width = `${Math.round(ev.progress * 100)}%`;
-    if ($('speedElapsed')) $('speedElapsed').textContent = `${ev.elapsed.toFixed(1)} / ${ev.total.toFixed(0)} 秒`;
+    if ($('bandwidthProgressFill')) $('bandwidthProgressFill').style.width = `${Math.round(ev.progress * 100)}%`;
+    if ($('speedElapsed')) {
+        // 分时测量：先下行再上行，把当前方向标出来，用户才知道曲线为什么一半是 0
+        const dir = ev.phase === 'DN' ? '下行 ' : (ev.phase === 'UP' ? '上行 ' : '');
+        $('speedElapsed').textContent = `${dir}${ev.elapsed.toFixed(1)} / ${ev.total.toFixed(0)} 秒`;
+    }
     if (shouldDrawSample) drawSpeedChart();
 });
 EventsOn('speedLog', (ev) => {
@@ -525,7 +537,7 @@ EventsOn('speedNodeDone', (ev) => {
     });
     if (key !== '__last__') bandwidthResults.delete('__last__');
     buildBandwidthGroups();
-    renderLeaderboard('bandwidthLeaderboard', 'bandwidthRankingList', 'bandwidthLeaderboardMeta', bandwidthRanking());
+    renderBandwidthLeaderboard();
     $('bandwidthLeaderboard')?.classList.remove('hidden');
 });
 EventsOn('speedDone', (ev) => {
@@ -542,7 +554,7 @@ EventsOn('speedDone', (ev) => {
     $('currentSpeedNode').textContent = ev.cancelled ? '已停止' : '已完成';
     // 单节点结果由 speedNodeDone 落地，这里只负责整轮收尾
     if (ev.cancelled) $('bandwidthLeaderboard')?.classList.add('hidden');
-    else renderLeaderboard('bandwidthLeaderboard', 'bandwidthRankingList', 'bandwidthLeaderboardMeta', bandwidthRanking());
+    else renderBandwidthLeaderboard();
     if (ev.cancelled) resetRings();
     if (ev.cancelled) {
         appendSpeedLog('warn', `测速已停止 · 地址 ${ev.addr}`);
@@ -705,10 +717,11 @@ function preferCardHTML(n) {
     `;
 }
 
-function renderLeaderboard(boardId, listId, metaId, ranking) {
+function renderLeaderboard(boardId, listId, metaId, ranking, opts = {}) {
     const board = $(boardId);
     const list = $(listId);
     if (!board || !list || !ranking?.length) return;
+    const unit = opts.unit || 'ms';
     const top = ranking.slice(0, 3);
     const rest = ranking.slice(3, 5);
     const itemHTML = (item, index) => {
@@ -717,30 +730,65 @@ function renderLeaderboard(boardId, listId, metaId, ranking) {
         <div class="ranking-item">
             <span class="ranking-rank">${index + 1}</span>
             <div class="ranking-name">${esc(item.name)}<span class="ranking-region">${node ? regionLabel(node.china) : '节点'} · #${item.id}</span></div>
-            <span class="ranking-delay">${item.delay}<small> ms</small></span>
+            <span class="ranking-delay">${item.value}<small> ${unit}</small></span>
         </div>`;
     };
     list.innerHTML = top.map(itemHTML).join('') + (rest.length
         ? `<div class="ranking-rest">${rest.map((item, index) => itemHTML(item, index + 3)).join('')}</div>`
         : '');
-    $(metaId).textContent = `共 ${ranking.length} 个节点 · 延迟越低越好`;
+    $(metaId).textContent = opts.meta || `共 ${ranking.length} 个节点 · 延迟越低越好`;
     board.classList.remove('hidden');
 }
 
 function renderPreferLeaderboard(ranking) {
-    renderLeaderboard('preferLeaderboard', 'preferRankingList', 'preferLeaderboardMeta', ranking);
+    renderLeaderboard('preferLeaderboard', 'preferRankingList', 'preferLeaderboardMeta',
+        ranking.map((item) => ({ id: item.id, name: item.name, value: item.delay })),
+        { unit: 'ms', meta: `共 ${ranking.length} 个节点 · 延迟越低越好` });
 }
 
-function bandwidthRanking() {
+// 带宽排行：默认按下载速度排（越高越好），也可切到上传或延迟
+let bandwidthRankDim = 'down';
+const rankDimMeta = {
+    down: { label: '下载', unit: 'Mbps', better: '越高越好' },
+    up: { label: '上传', unit: 'Mbps', better: '越高越好' },
+    delay: { label: '延迟', unit: 'ms', better: '越低越好' },
+};
+
+function bandwidthRanking(dim = bandwidthRankDim) {
     const ranking = [];
     for (const [key, result] of bandwidthResults) {
-        if (key === '__last__' || result?.delay === undefined) continue;
+        if (key === '__last__' || !result || result.error) continue;
         const node = nodes.find((candidate) => String(candidate.id) === key);
         if (!node) continue;
-        ranking.push({ id: node.id, name: node.name, delay: result.delay });
+        const raw = dim === 'delay' ? result.delay : Number(result[dim]);
+        if (raw === undefined || raw === null || raw === '') continue;
+        const value = Number(raw);
+        if (!Number.isFinite(value) || (dim !== 'delay' && value <= 0)) continue;
+        ranking.push({ id: node.id, name: node.name, value: dim === 'delay' ? value : Math.round(value * 10) / 10 });
     }
-    return ranking.sort((a, b) => a.delay - b.delay);
+    // 带宽越高越好，延迟越低越好
+    ranking.sort((a, b) => (dim === 'delay' ? a.value - b.value : b.value - a.value));
+    return ranking;
 }
+
+function renderBandwidthLeaderboard() {
+    const dim = bandwidthRankDim;
+    const meta = rankDimMeta[dim] || rankDimMeta.down;
+    const ranking = bandwidthRanking(dim);
+    if (!ranking.length) return;
+    renderLeaderboard('bandwidthLeaderboard', 'bandwidthRankingList', 'bandwidthLeaderboardMeta', ranking, {
+        unit: meta.unit,
+        meta: `共 ${ranking.length} 个节点 · ${meta.label}${meta.better}`,
+    });
+}
+
+document.querySelectorAll('.rank-dim').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        bandwidthRankDim = btn.dataset.rankDim;
+        document.querySelectorAll('.rank-dim').forEach((b) => b.classList.toggle('active', b === btn));
+        renderBandwidthLeaderboard();
+    });
+});
 
 function hidePreferLeaderboard() {
     $('preferLeaderboard')?.classList.add('hidden');
@@ -1563,6 +1611,8 @@ const applyTheme = () => {
     const mode = themeMode.v;
     const resolved = mode === 'system' ? (themeMQ.matches ? 'light' : 'dark') : mode;
     document.documentElement.dataset.theme = resolved;
+    // 曲线颜色取自 CSS 变量，切主题后要立刻重画一次，否则要等下一帧采样才更新
+    drawSpeedChart();
 };
 const syncThemeUI = () => {
     const isSystem = themeMode.v === 'system';

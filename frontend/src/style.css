@@ -635,3 +635,9 @@
 :root[data-theme="light"] .login-required:hover,:root[data-theme="light"] .login-required:focus-visible{background:#f8f9fb;border-color:#c9d0d8}
 :root[data-theme="light"] .login-required-icon{background:#eef1f5;color:#7c8794}
 :root[data-theme="light"] .login-required b{color:#3a424c}
+/* 实时速率曲线：颜色跟随主题，亮色主题下必须用深色，否则白底上几乎看不见 */
+:root{--chart-down:#e8eaed;--chart-up:#8b939e}
+:root[data-theme="light"]{--chart-down:#2f3742;--chart-up:#7b8695}
+/* 带宽排行榜的排序维度切换（复用 .filter 的外观，只调间距） */
+.leaderboard-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.rank-dims{display:inline-flex;align-items:center;gap:5px}
