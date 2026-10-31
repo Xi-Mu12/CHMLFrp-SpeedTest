@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CHMLFrp-SpeedTest · CHMLFrp 节点延迟与带宽测速工具</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 64px 20px; background: #f6f8fa; color: #1f2328;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    line-height: 1.75; font-size: 15px;
+  }
+  .page {
+    max-width: 760px; margin: 0 auto; background: #fff; border: 1px solid #d8dee4;
+    border-radius: 12px; padding: 56px 56px 40px; text-align: center;
+  }
+  .logo { width: 96px; height: 96px; display: block; margin: 0 auto 24px; border-radius: 20px; }
+  h1 { font-size: 30px; margin: 0 0 12px; letter-spacing: .3px; }
+  .tagline { color: #59636e; font-size: 15px; margin: 0 auto; max-width: 540px; }
+  .badges { margin: 20px 0 32px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .badge {
+    font-size: 12px; color: #59636e; background: #f6f8fa;
+    border: 1px solid #d8dee4; border-radius: 999px; padding: 4px 12px;
+  }
+  .links { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 34px; }
+  .btn {
+    display: inline-block; padding: 11px 24px; border-radius: 8px; font-size: 14px;
+    text-decoration: none; border: 1px solid #d8dee4; color: #1f2328; background: #fff;
+  }
+  .btn:hover { background: #f6f8fa; }
+  .btn.primary { background: #0969da; border-color: #0969da; color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: #0757b8; }
+  .notice {
+    text-align: left; background: #ddf4ff; border: 1px solid #54aeff;
+    border-radius: 8px; padding: 14px 16px; font-size: 13.5px; color: #0a3069; line-height: 1.7;
+  }
+  .notice strong { color: #0a3069; }
+  .footer { margin-top: 34px; padding-top: 20px; border-top: 1px solid #d8dee4; color: #59636e; font-size: 13px; }
+  .footer a { color: #0969da; text-decoration: none; }
+  .footer a:hover { text-decoration: underline; }
+  @media (max-width: 640px) {
+    body { padding: 16px 8px; }
+    .page { padding: 32px 22px 28px; }
+    h1 { font-size: 24px; }
+    .logo { width: 76px; height: 76px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <img class="logo" src="./logo.webp" alt="CHMLFrp-SpeedTest 应用图标" />
+  <h1>CHMLFrp-SpeedTest</h1>
+  <p class="tagline">
+    基于 Wails + Go + 原生 Web 前端构建的桌面工具，用于快速筛选延迟低、可用性好的 CHMLFrp 节点，
+    并测出经隧道通路的真实上下行带宽。
+  </p>
+
+  <div class="badges">
+    <span class="badge">真实 TCPing 延迟测速</span>
+    <span class="badge">frpc 隧道带宽测速</span>
+    <span class="badge">Windows · Linux · macOS</span>
+  </div>
+
+  <div class="links">
+    <a class="btn primary" href="./privacy.html">隐私政策</a>
+    <a class="btn" href="./terms.html">服务条款</a>
+  </div>
+
+  <p class="notice">
+    <strong>说明：</strong>本应用主要在你的本机运行，作者不运营用于收集测速记录的后台，也不集成遥测、崩溃统计或行为分析。
+    使用账号登录、本机 IP 查询或应用内推广入口时，应用会按功能访问相应的第三方服务，具体范围与处理方式见隐私政策。
+  </p>
+
+  <div class="footer">
+    XiMu · <a href="mailto:ximu.setback@qq.com">ximu.setback@qq.com</a> · MIT License
+  </div>
+</div>
+</body>
+</html>
