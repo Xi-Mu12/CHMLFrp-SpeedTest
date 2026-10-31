@@ -23,6 +23,15 @@ jobs:
           go-version: '1.25'
           cache: true
 
+      # main.go 用 //go:embed all:frontend/dist 打包前端产物，而 dist 是构建产物、
+      # 被 .gitignore 排除。这里只需让 embed 目标存在即可通过编译，
+      # 真实前端构建由 release.yml 负责，不必为了 vet/test 装一遍 npm 依赖。
+      - name: Stub frontend dist for go:embed
+        shell: bash
+        run: |
+          mkdir -p frontend/dist
+          echo "placeholder so //go:embed all:frontend/dist can resolve" > frontend/dist/ci-placeholder.txt
+
       # 编译期必须带 desktop,production 标签，否则 wails 运行时缺实现直接报错
       - name: go vet
         run: go vet -tags desktop,production ./...
