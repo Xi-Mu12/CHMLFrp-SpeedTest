@@ -35,17 +35,32 @@ export namespace main {
 	export class IPGeo {
 	    ip: string;
 	    version: number;
+	    type: string;
+	    continent: string;
+	    continentCode: string;
 	    country: string;
 	    countryCode: string;
 	    region: string;
+	    regionCode: string;
 	    city: string;
 	    zip: string;
-	    isp: string;
-	    org: string;
-	    as: string;
-	    timeZone: string;
 	    latitude: number;
 	    longitude: number;
+	    isEU: boolean;
+	    callingCode: string;
+	    capital: string;
+	    borders: string;
+	    flagEmoji: string;
+	    flagImg: string;
+	    asn: string;
+	    asnNumber: number;
+	    isp: string;
+	    org: string;
+	    domain: string;
+	    timeZone: string;
+	    timeZoneAbbr: string;
+	    utcOffset: string;
+	    isDST: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new IPGeo(source);
@@ -55,17 +70,32 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ip = source["ip"];
 	        this.version = source["version"];
+	        this.type = source["type"];
+	        this.continent = source["continent"];
+	        this.continentCode = source["continentCode"];
 	        this.country = source["country"];
 	        this.countryCode = source["countryCode"];
 	        this.region = source["region"];
+	        this.regionCode = source["regionCode"];
 	        this.city = source["city"];
 	        this.zip = source["zip"];
-	        this.isp = source["isp"];
-	        this.org = source["org"];
-	        this.as = source["as"];
-	        this.timeZone = source["timeZone"];
 	        this.latitude = source["latitude"];
 	        this.longitude = source["longitude"];
+	        this.isEU = source["isEU"];
+	        this.callingCode = source["callingCode"];
+	        this.capital = source["capital"];
+	        this.borders = source["borders"];
+	        this.flagEmoji = source["flagEmoji"];
+	        this.flagImg = source["flagImg"];
+	        this.asn = source["asn"];
+	        this.asnNumber = source["asnNumber"];
+	        this.isp = source["isp"];
+	        this.org = source["org"];
+	        this.domain = source["domain"];
+	        this.timeZone = source["timeZone"];
+	        this.timeZoneAbbr = source["timeZoneAbbr"];
+	        this.utcOffset = source["utcOffset"];
+	        this.isDST = source["isDST"];
 	    }
 	}
 	export class LocalIP {

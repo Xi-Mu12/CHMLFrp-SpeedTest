@@ -3,10 +3,7 @@
 package main
 
 import (
-	"fmt"
 	"net"
-	"sort"
-	"sync"
 	"time"
 )
 
@@ -75,54 +72,4 @@ func PingOne(name, addr string, times int, timeout time.Duration) PingResult {
 		r.Jitter = time.Duration(int64(jsum) / int64(len(samples)-1))
 	}
 	return r
-}
-
-// PingAll 并发测全部候选，concurrency 对应 CFST 的 -n 参数
-func PingAll(cands []Candidate, times int, timeout time.Duration, concurrency int) []PingResult {
-	if concurrency <= 0 {
-		concurrency = 50
-	}
-	if concurrency > 1000 {
-		concurrency = 1000
-	}
-	results := make([]PingResult, len(cands))
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-	for i, c := range cands {
-		wg.Add(1)
-		go func(idx int, cd Candidate) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			results[idx] = PingOne(cd.Name, cd.Addr, times, timeout)
-			fmt.Printf("\r延迟测速中 %d/%d: %s avg=%v loss=%.2f", idx+1, len(cands), cd.Addr, results[idx].AvgDelay, results[idx].LossRate)
-		}(i, c)
-	}
-	wg.Wait()
-	fmt.Println()
-	return results
-}
-
-// FilterAndSortPing 先过滤（延迟上限/丢包上限，对应 CFST -tl/-tlr），再按丢包→延迟排序
-func FilterAndSortPing(results []PingResult, maxDelay time.Duration, maxLoss float64) []PingResult {
-	var out []PingResult
-	for _, r := range results {
-		if r.Recv == 0 {
-			continue // 超时/不通直接淘汰
-		}
-		if maxDelay > 0 && r.AvgDelay > maxDelay {
-			continue
-		}
-		if r.LossRate > maxLoss {
-			continue
-		}
-		out = append(out, r)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].LossRate != out[j].LossRate {
-			return out[i].LossRate < out[j].LossRate
-		}
-		return out[i].AvgDelay < out[j].AvgDelay
-	})
-	return out
 }

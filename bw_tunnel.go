@@ -211,12 +211,24 @@ func waitTunnelByName(token, name string, timeout time.Duration, cancelled func(
 	}
 }
 
-// isFatalTunnelErr 判断创建失败的报错是否重试也没用（配额/权限类）
+// isFatalTunnelErr 判断创建失败的报错是否重试也没用（配额/权限类）。
+// 关键词必须足够具体：早期版本用裸 "token"、"vip" 做子串匹配，
+// 会把「nodetoken 校验失败」「vip 节点繁忙」这类可重试错误误判为致命，
+// 直接放弃剩余 3 次重试，是实打实的漏测来源。
 func isFatalTunnelErr(msg string) bool {
-	low := strings.ToLower(msg)
+	low := strings.ToLower(strings.TrimSpace(msg))
+	if low == "" {
+		return false
+	}
 	fatal := []string{
-		"上限", "超限", "vip", "会员", "权限", "未登录", "登录已过期",
-		"unauthorized", "forbidden", "不属于你", "token",
+		// 配额 / 会员权限
+		"上限", "超限", "配额", "会员", "仅限vip", "vip专享", "vip节点",
+		// 登录态 / 鉴权
+		"未登录", "请先登录", "登录已过期", "登录过期", "权限不足", "无权限",
+		"unauthorized", "forbidden",
+		"token无效", "token 无效", "invalid token", "token已过期", "token expired",
+		// 明确的业务拒绝
+		"不属于你", "被封禁", "已被封禁",
 	}
 	for _, f := range fatal {
 		if strings.Contains(low, f) {

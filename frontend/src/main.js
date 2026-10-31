@@ -1450,6 +1450,10 @@ const exportPreferCsv = async () => {
     }
 };
 
+// 导出 PNG 的 canvas 字体栈：必须与页面字体栈保持一致，
+// 否则 mac/Linux 上 "Microsoft YaHei" 不存在，中文会整片掉成方块。
+const CANVAS_FONT = '"Microsoft YaHei","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Source Han Sans SC",sans-serif';
+
 const exportPreferPng = async () => {
     if (!nodes.length) return;
     const rows = preferExportRows();
@@ -1464,23 +1468,23 @@ const exportPreferPng = async () => {
     ctx.fillStyle = color('--bg', '#0d0f12');
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = color('--text', '#f2f4f7');
-    ctx.font = '600 20px "Microsoft YaHei", sans-serif';
+    ctx.font = `600 20px ${CANVAS_FONT}`;
     ctx.fillText('ChmlFrp 延迟测速报告', 36, 48);
     ctx.fillStyle = color('--muted', '#8b939e');
-    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    ctx.font = `12px ${CANVAS_FONT}`;
     const tested = [...results.keys()].length;
     ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　延迟越低越好`, 36, 74);
     const cols = [36, 96, 330, 430, 510, 590, 670, 760, 850];
     const headers = ['编号', '名称', '区域', '节点组', '地域', 'UDP', '防御', '延迟', '排名'];
     ctx.fillStyle = color('--dim', '#5c6570');
-    ctx.font = '11px "Microsoft YaHei", sans-serif';
+    ctx.font = `11px ${CANVAS_FONT}`;
     headers.forEach((t, i) => ctx.fillText(t, cols[i], 108));
     ctx.strokeStyle = color('--line', '#292e36');
     ctx.beginPath();
     ctx.moveTo(36, 116);
     ctx.lineTo(w - 36, 116);
     ctx.stroke();
-    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    ctx.font = `12px ${CANVAS_FONT}`;
     rows.slice(1, 13).forEach((r, idx) => {
         const y = 140 + idx * 22;
         ctx.fillStyle = color('--text', '#f2f4f7');
@@ -1495,7 +1499,7 @@ const exportPreferPng = async () => {
     const chartTop = 430;
     const chartH = 170;
     ctx.fillStyle = color('--dim', '#5c6570');
-    ctx.font = '11px "Microsoft YaHei", sans-serif';
+    ctx.font = `11px ${CANVAS_FONT}`;
     ctx.fillText('延迟对比（ms，取延迟最低的前 10 个节点）', 36, chartTop - 12);
     ctx.strokeStyle = color('--line', '#292e36');
     ctx.strokeRect(36, chartTop, w - 72, chartH);
@@ -1503,7 +1507,7 @@ const exportPreferPng = async () => {
     const ranked = [...results.entries()].filter(([, d]) => d >= 0).sort((a, b) => a[1] - b[1]).slice(0, 10);
     if (!ranked.length) {
         ctx.fillStyle = color('--muted', '#8b939e');
-        ctx.font = '12px "Microsoft YaHei", sans-serif';
+        ctx.font = `12px ${CANVAS_FONT}`;
         ctx.fillText('暂无延迟数据，请先完成一次测速', 56, chartTop + chartH / 2);
     } else {
         const maxDelay = Math.max(...ranked.map(([, d]) => d), 1);
@@ -1516,10 +1520,10 @@ const exportPreferPng = async () => {
             ctx.fillStyle = delay <= 80 ? '#63d9a0' : delay <= 150 ? '#d9dde3' : '#ef8b8b';
             ctx.fillRect(x + 6, y, barW - 16, barH);
             ctx.fillStyle = color('--text', '#f2f4f7');
-            ctx.font = '11px "Microsoft YaHei", sans-serif';
+            ctx.font = `11px ${CANVAS_FONT}`;
             ctx.fillText(`${delay}`, x + 6, y - 6);
             ctx.fillStyle = color('--dim', '#5c6570');
-            ctx.font = '10px "Microsoft YaHei", sans-serif';
+            ctx.font = `10px ${CANVAS_FONT}`;
             ctx.fillText(String(node?.name ?? `#${id}`).slice(0, 8), x + 6, chartTop + chartH - 8);
         });
     }
@@ -1531,34 +1535,6 @@ const exportPreferPng = async () => {
     }
 };
 
-// ---------- 节点列表页 ----------
-function renderNodesTable() {
-    const filter = $('groupFilter').value;
-    const list = filter === 'all' ? nodes : nodes.filter((n) => n.group === filter);
-    const tbody = $('nodesTable').querySelector('tbody');
-    tbody.innerHTML = list.map((n) => {
-        const d = results.get(n.id);
-        const st = preferStats.get(n.id);
-        const icmpOnline = d !== undefined && d < 0 && typeof st?.icmp === 'number' && st.icmp >= 0;
-        const delayCell = d === undefined ? '--' : (d < 0 ? (icmpOnline ? `ICMP ${Math.round(st.icmp)}ms` : '超时') : `${d} ms`);
-        return `
-        <tr>
-            <td>#${n.id}</td><td>${esc(n.name)}</td><td>${esc(n.area || '-')}</td>
-            <td><span class="pill ${n.group === 'vip' ? 'vip' : 'user'}">${n.group === 'vip' ? '会员' : '普通'}</span></td>
-            <td>${regionLabel(n.china)}</td><td><span class="pill ok">可用</span></td>
-            <td>${delayCell}</td><td>待测速</td>
-        </tr>`;
-    }).join('');
-}
-$('refreshNodes').addEventListener('click', async () => {
-    $('nodesMsg').classList.remove('hidden');
-    $('nodesMsg').innerHTML = '<span class="loader"></span><b>正在加载节点</b><small>请稍候</small>';
-    await loadNodes();
-    $('nodesMsg').classList.add('hidden');
-    $('nodesCard').classList.remove('hidden');
-    renderNodesTable();
-});
-$('groupFilter').addEventListener('change', renderNodesTable);
 $('closeBandwidthDetail').addEventListener('click', () => $('bandwidthDetail').classList.add('hidden'));
 
 // ---------- 测速任务弹窗（静态确认信息，不做动态刷新） ----------
@@ -1622,23 +1598,23 @@ const exportBandwidthPng = async () => {
     ctx.fillStyle = color('--bg', '#0d0f12');
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = color('--text', '#f2f4f7');
-    ctx.font = '600 20px "Microsoft YaHei", sans-serif';
+    ctx.font = `600 20px ${CANVAS_FONT}`;
     ctx.fillText('ChmlFrp 带宽测速报告', 36, 48);
     ctx.fillStyle = color('--muted', '#8b939e');
-    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    ctx.font = `12px ${CANVAS_FONT}`;
     const tested = nodes.filter((n) => hasBandwidthResult(bandwidthResults.get(String(n.id)))).length;
     ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　单次时长：${settings.testSeconds} 秒`, 36, 74);
     const cols = [36, 96, 330, 390, 470, 560, 650, 740];
     const headers = ['编号', '名称', '节点组', '地域', '延迟', '下载', '上传', '平均'];
     ctx.fillStyle = color('--dim', '#5c6570');
-    ctx.font = '11px "Microsoft YaHei", sans-serif';
+    ctx.font = `11px ${CANVAS_FONT}`;
     headers.forEach((t, i) => ctx.fillText(t, cols[i], 108));
     ctx.strokeStyle = color('--line', '#292e36');
     ctx.beginPath();
     ctx.moveTo(36, 116);
     ctx.lineTo(w - 36, 116);
     ctx.stroke();
-    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    ctx.font = `12px ${CANVAS_FONT}`;
     rows.slice(1, 13).forEach((r, idx) => {
         const y = 140 + idx * 22;
         ctx.fillStyle = color('--text', '#f2f4f7');
@@ -1652,7 +1628,7 @@ const exportBandwidthPng = async () => {
     const chartTop = 430;
     const chartH = 160;
     ctx.fillStyle = color('--dim', '#5c6570');
-    ctx.font = '11px "Microsoft YaHei", sans-serif';
+    ctx.font = `11px ${CANVAS_FONT}`;
     ctx.fillText('实时上下行速率（Mbps）', 36, chartTop - 12);
     ctx.fillText('下载', 760, chartTop - 12);
     ctx.fillStyle = '#e8eaed';
@@ -1809,7 +1785,7 @@ const AD_URL = 'https://fanyi.qzhua.net/';
     });
 });
 
-// ---------- 本机 IP：网卡地址枚举 + 公网 IP 信息（ip-api.com） ----------
+// ---------- 本机 IP：网卡地址枚举 + 公网 IP 信息（ipwho.is） ----------
 let toolsLoaded = false;
 
 const copyText = async (text) => {
@@ -1886,31 +1862,48 @@ async function refreshLocalIPs() {
 function renderIPGeo(geo, self) {
     const card = $('ipInfoCard');
     const place = [geo.region, geo.city].filter(Boolean).join(' · ') || '地理位置未知';
-    // ip-api 的 as 字段形如 "AS9808 China Mobile Communications Group."，只取 AS 号
-    const asMatch = String(geo.as || '').match(/AS\d+/i);
-    const asn = asMatch ? asMatch[0].toUpperCase() : '--';
+    const withCode = (name, code) => (name ? `${name}${code ? ` (${code})` : ''}` : '--');
     const coord = (geo.latitude || geo.longitude)
         ? `${Number(geo.latitude).toFixed(4)}, ${Number(geo.longitude).toFixed(4)}`
         : '--';
+    // 时区额外显示缩写、UTC 偏移与夏令时标记
+    const tzExtra = [geo.timeZoneAbbr, geo.utcOffset ? `UTC${geo.utcOffset}` : '', geo.isDST ? '夏令时' : '']
+        .filter(Boolean).join(' · ');
+    // 运营商格子：组织名与运营商不同时，补一行组织名（如 中国移动 集团 vs 分公司）
+    const ispExtra = geo.org && geo.org !== geo.isp ? geo.org : '';
     const cells = [
-        ['国家/地区', geo.country ? `${geo.country}${geo.countryCode ? ` (${geo.countryCode})` : ''}` : '--'],
-        ['省 / 州', geo.region || '--'],
+        ['大洲', withCode(geo.continent, geo.continentCode)],
+        ['国家/地区', withCode(geo.country, geo.countryCode)],
+        ['省 / 州', withCode(geo.region, geo.regionCode)],
         ['城市', geo.city || '--'],
         ['邮编', geo.zip || '--'],
-        ['ASN', asn],
-        ['运营商', geo.isp || '--', geo.org && geo.org !== geo.isp ? geo.org : ''],
-        ['时区', geo.timeZone || '--'],
+        ['电话区号', geo.callingCode ? `+${geo.callingCode}` : '--'],
+        ['首都', geo.capital || '--'],
+        ['ASN', geo.asn || '--'],
+        ['运营商', geo.isp || '--', ispExtra],
+        ['网络域名', geo.domain || '--'],
+        ['时区', geo.timeZone || '--', tzExtra],
         ['经纬度', coord],
     ];
-    const badge = geo.country ? `<span class="ip-badge">${esc(geo.country)}</span>` : '';
+    const flag = geo.flagImg
+        ? `<img class="ip-flag" src="${esc(geo.flagImg)}" alt="" loading="lazy"/>`
+        : '';
+    const badges = [
+        geo.country ? `<span class="ip-badge">${flag}${esc(geo.country)}</span>` : '',
+        geo.isEU ? '<span class="ip-badge">欧盟</span>' : '',
+    ].filter(Boolean).join('');
     card.className = 'ip-geo has-data';
     card.innerHTML = `
         <div class="ip-geo-head">
-            <div class="ip-geo-title"><b>${esc(geo.ip)}</b>${badge}</div>
+            <div class="ip-geo-title"><b>${esc(geo.ip)}</b>${badges}</div>
             <div class="ip-geo-sub"><span class="ip-geo-place">${esc(place)}</span><span class="ip-geo-kind">IPv${geo.version || 4}${self ? ' · 当前出口' : ' · 指定查询'}</span></div>
         </div>
         <div class="ip-geo-grid">${cells.map(([k, v, extra]) => `<div><span>${k}</span><b>${esc(v)}</b>${extra ? `<em>${esc(extra)}</em>` : ''}</div>`).join('')}</div>
-        <p class="ip-geo-note">数据来源 ip-api.com · 免密钥，约 45 次/分钟 · 中文结果</p>`;
+        <p class="ip-geo-note">数据来源 ipwho.is · 免密钥 · 1000 次/天 · 中文结果</p>`;
+    // 旗帜是远程 SVG，加载失败就摘掉，避免显示破图空框
+    card.querySelectorAll('.ip-flag').forEach((img) => {
+        img.addEventListener('error', () => { img.remove(); });
+    });
     $('myIpBackBtn').classList.toggle('hidden', self);
 }
 

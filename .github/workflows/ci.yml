@@ -1,0 +1,32 @@
+name: CI
+
+# 质量门禁：推送 / PR 时跑 go vet 与单元测试，避免"能编译但逻辑错"的改动直接进主干。
+# 只跑 windows-latest —— Go 侧代码按 build tag 分平台，Windows 分支是主力，
+# 三端原生打包仍由 release.yml 手动触发完成。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  vet-test:
+    name: vet + test (windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      # 编译期必须带 desktop,production 标签，否则 wails 运行时缺实现直接报错
+      - name: go vet
+        run: go vet -tags desktop,production ./...
+
+      # -count=1 关掉测试缓存，否则改了代码但结果命中旧缓存会假绿
+      - name: go test
+        run: go test -tags desktop,production -count=1 ./...

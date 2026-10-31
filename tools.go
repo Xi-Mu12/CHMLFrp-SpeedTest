@@ -1,5 +1,5 @@
 // tools.go —— 本机 IP：网卡地址枚举 + 公网 IP 归属地查询
-// 归属地查询走 ip-api.com（免费、无需密钥、约 45 次/分钟、中文返回），
+// 归属地查询走 ipwho.is（免费、无需密钥、1000 次/天、lang=zh-CN 中文返回），
 // 打开页面即自动查询当前出口 IP。
 package main
 
@@ -108,57 +108,92 @@ func (a *App) GetLocalIPs() ([]LocalIP, error) {
 	return out, nil
 }
 
-// IPGeo IP 地理位置与网络归属。数据来自 ip-api.com（中文返回），无需密钥。
+// IPGeo IP 地理位置与网络归属。数据来自 ipwho.is（lang=zh-CN 中文返回），无需密钥。
 type IPGeo struct {
-	IP          string  `json:"ip"`
-	Version     int     `json:"version"` // 4 / 6
-	Country     string  `json:"country"`
-	CountryCode string  `json:"countryCode"`
-	Region      string  `json:"region"`
-	City        string  `json:"city"`
-	Zip         string  `json:"zip"`
-	ISP         string  `json:"isp"`
-	Org         string  `json:"org"`
-	AS          string  `json:"as"`
-	TimeZone    string  `json:"timeZone"`
-	Latitude    float64 `json:"latitude"`
-	Longitude   float64 `json:"longitude"`
+	IP            string  `json:"ip"`
+	Version       int     `json:"version"` // 4 / 6
+	Type          string  `json:"type"`    // 接口原样返回的 IPv4 / IPv6
+	Continent     string  `json:"continent"`
+	ContinentCode string  `json:"continentCode"`
+	Country       string  `json:"country"`
+	CountryCode   string  `json:"countryCode"`
+	Region        string  `json:"region"`
+	RegionCode    string  `json:"regionCode"`
+	City          string  `json:"city"`
+	Zip           string  `json:"zip"`
+	Latitude      float64 `json:"latitude"`
+	Longitude     float64 `json:"longitude"`
+	IsEU          bool    `json:"isEU"`
+	CallingCode   string  `json:"callingCode"`
+	Capital       string  `json:"capital"`
+	Borders       string  `json:"borders"`
+	FlagEmoji     string  `json:"flagEmoji"`
+	FlagImg       string  `json:"flagImg"`
+	ASN           string  `json:"asn"`       // 形如 AS9808
+	ASNNumber     int     `json:"asnNumber"` // 数字形式，便于排序或跳转
+	ISP           string  `json:"isp"`
+	Org           string  `json:"org"`
+	Domain        string  `json:"domain"`
+	TimeZone      string  `json:"timeZone"`     // 时区 ID，如 Asia/Shanghai
+	TimeZoneAbbr  string  `json:"timeZoneAbbr"` // 时区缩写，如 CST
+	UTCOffset     string  `json:"utcOffset"`    // 相对 UTC 偏移，如 +08:00
+	IsDST         bool    `json:"isDST"`        // 是否处于夏令时
 }
 
-// ipAPIResp ip-api.com 原始返回。失败时 status=fail + message，HTTP 仍为 200。
-type ipAPIResp struct {
-	Status      string  `json:"status"`
-	Message     string  `json:"message"`
-	Country     string  `json:"country"`
-	CountryCode string  `json:"countryCode"`
-	Region      string  `json:"region"`
-	RegionName  string  `json:"regionName"`
-	City        string  `json:"city"`
-	Zip         string  `json:"zip"`
-	Lat         float64 `json:"lat"`
-	Lon         float64 `json:"lon"`
-	TimeZone    string  `json:"timezone"`
-	ISP         string  `json:"isp"`
-	Org         string  `json:"org"`
-	AS          string  `json:"as"`
-	Query       string  `json:"query"`
+// ipWhoResp ipwho.is 原始返回。字段层级：顶级是地理信息，
+// 网络与时间信息分别嵌套在 connection / timezone 里，flag 是旗帜资源。
+// 失败时 success=false + message，HTTP 仍可能是 200。
+type ipWhoResp struct {
+	IP            string  `json:"ip"`
+	Success       bool    `json:"success"`
+	Message       string  `json:"message"`
+	Type          string  `json:"type"`
+	Continent     string  `json:"continent"`
+	ContinentCode string  `json:"continent_code"`
+	Country       string  `json:"country"`
+	CountryCode   string  `json:"country_code"`
+	Region        string  `json:"region"`
+	RegionCode    string  `json:"region_code"`
+	City          string  `json:"city"`
+	Latitude      float64 `json:"latitude"`
+	Longitude     float64 `json:"longitude"`
+	IsEU          bool    `json:"is_eu"`
+	Postal        string  `json:"postal"`
+	CallingCode   string  `json:"calling_code"`
+	Capital       string  `json:"capital"`
+	Borders       string  `json:"borders"`
+	Flag          struct {
+		Img   string `json:"img"`
+		Emoji string `json:"emoji"`
+	} `json:"flag"`
+	Connection struct {
+		ASN    int    `json:"asn"`
+		Org    string `json:"org"`
+		ISP    string `json:"isp"`
+		Domain string `json:"domain"`
+	} `json:"connection"`
+	TimeZone struct {
+		ID     string `json:"id"`
+		Abbr   string `json:"abbr"`
+		IsDST  bool   `json:"is_dst"`
+		Offset int    `json:"offset"`
+		UTC    string `json:"utc"`
+	} `json:"timezone"`
 }
 
-// ipAPIEndpoint 免费版入口。https 需付费，免费版只提供 http；
-// lang=zh-CN 让国家/省市返回中文。额度约 45 次/分钟，无密钥。
-const ipAPIEndpoint = "http://ip-api.com/json/"
+// ipWhoEndpoint 免密钥入口，免费额度 1000 次/天（按出口 IP 计）。
+// lang=zh-CN 让国家/省市/首都/大洲返回中文。
+const ipWhoEndpoint = "https://ipwho.is/"
 
-// ipAPIFailMsg 把接口的英文失败原因翻成中文。
-func ipAPIFailMsg(msg string) string {
+// ipWhoFailMsg 把接口的英文失败原因翻成中文。
+func ipWhoFailMsg(msg string) string {
 	switch strings.ToLower(strings.TrimSpace(msg)) {
-	case "private range":
-		return "该地址属于内网（私有）网段，没有公网归属地"
-	case "reserved range":
-		return "该地址属于保留网段，没有公网归属地"
-	case "invalid query":
+	case "invalid ip address", "invalid query":
 		return "IP 地址格式不正确"
-	case "quota exceeded":
-		return "已达到免费额度上限（约 45 次/分钟），请稍后再试"
+	case "reserved range", "private range":
+		return "该地址属于内网/保留网段，没有公网归属地"
+	case "rate limit exceeded":
+		return "已达到免费额度上限（1000 次/天），请稍后再试"
 	default:
 		if msg == "" {
 			return "接口未返回可用的归属地数据"
@@ -167,13 +202,13 @@ func ipAPIFailMsg(msg string) string {
 	}
 }
 
-// fetchIPGeo 请求 ip-api.com；path 为空表示查当前出口 IP，否则为 "{ip}"。
+// fetchIPGeo 请求 ipwho.is；path 为空表示查当前出口 IP，否则为 "{ip}"。
 func (a *App) fetchIPGeo(path string) (IPGeo, error) {
 	ctx := context.Background()
 	if a != nil && a.ctx != nil {
 		ctx = a.ctx
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ipAPIEndpoint+path+"?lang=zh-CN", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ipWhoEndpoint+path+"?lang=zh-CN", nil)
 	if err != nil {
 		return IPGeo{}, err
 	}
@@ -181,42 +216,61 @@ func (a *App) fetchIPGeo(path string) (IPGeo, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return IPGeo{}, fmt.Errorf("请求 ip-api.com 失败：%v", err)
+		return IPGeo{}, fmt.Errorf("请求 ipwho.is 失败：%v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return IPGeo{}, fmt.Errorf("已达到免费额度上限（约 45 次/分钟），请稍后再试")
+		return IPGeo{}, fmt.Errorf("已达到免费额度上限（1000 次/天，按出口 IP 计），请稍后再试")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return IPGeo{}, fmt.Errorf("ip-api.com 返回 HTTP %d", resp.StatusCode)
+		return IPGeo{}, fmt.Errorf("ipwho.is 返回 HTTP %d", resp.StatusCode)
 	}
 
-	var r ipAPIResp
+	var r ipWhoResp
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return IPGeo{}, fmt.Errorf("解析 ip-api.com 返回失败：%v", err)
+		return IPGeo{}, fmt.Errorf("解析 ipwho.is 返回失败：%v", err)
 	}
-	if r.Status != "success" || r.Query == "" {
-		return IPGeo{}, fmt.Errorf("%s", ipAPIFailMsg(r.Message))
+	if !r.Success || r.IP == "" {
+		return IPGeo{}, fmt.Errorf("%s", ipWhoFailMsg(r.Message))
 	}
 
 	version := 4
-	if parsed := net.ParseIP(r.Query); parsed != nil && parsed.To4() == nil {
+	if parsed := net.ParseIP(r.IP); parsed != nil && parsed.To4() == nil {
 		version = 6
 	}
+	asn := ""
+	if r.Connection.ASN > 0 {
+		asn = fmt.Sprintf("AS%d", r.Connection.ASN)
+	}
 	return IPGeo{
-		IP:          r.Query,
-		Version:     version,
-		Country:     r.Country,
-		CountryCode: r.CountryCode,
-		Region:      r.RegionName,
-		City:        r.City,
-		Zip:         r.Zip,
-		ISP:         r.ISP,
-		Org:         r.Org,
-		AS:          r.AS,
-		TimeZone:    r.TimeZone,
-		Latitude:    r.Lat,
-		Longitude:   r.Lon,
+		IP:            r.IP,
+		Version:       version,
+		Type:          r.Type,
+		Continent:     r.Continent,
+		ContinentCode: r.ContinentCode,
+		Country:       r.Country,
+		CountryCode:   r.CountryCode,
+		Region:        r.Region,
+		RegionCode:    r.RegionCode,
+		City:          r.City,
+		Zip:           r.Postal,
+		Latitude:      r.Latitude,
+		Longitude:     r.Longitude,
+		IsEU:          r.IsEU,
+		CallingCode:   r.CallingCode,
+		Capital:       r.Capital,
+		Borders:       r.Borders,
+		FlagEmoji:     r.Flag.Emoji,
+		FlagImg:       r.Flag.Img,
+		ASN:           asn,
+		ASNNumber:     r.Connection.ASN,
+		ISP:           r.Connection.ISP,
+		Org:           r.Connection.Org,
+		Domain:        r.Connection.Domain,
+		TimeZone:      r.TimeZone.ID,
+		TimeZoneAbbr:  r.TimeZone.Abbr,
+		UTCOffset:     r.TimeZone.UTC,
+		IsDST:         r.TimeZone.IsDST,
 	}, nil
 }
 
@@ -225,7 +279,7 @@ func (a *App) GetMyIPInfo() (IPGeo, error) {
 	return a.fetchIPGeo("")
 }
 
-// QueryIPInfo 查询指定 IP 的信息，数据源同为 ip-api.com（无需密钥）。
+// QueryIPInfo 查询指定 IP 的信息，数据源同为 ipwho.is（无需密钥）。
 func (a *App) QueryIPInfo(ip string) (IPGeo, error) {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
@@ -238,6 +292,6 @@ func (a *App) QueryIPInfo(ip string) (IPGeo, error) {
 	if parsed.IsLoopback() || (parsed.To4() != nil && isPrivateIPv4(parsed)) {
 		return IPGeo{}, fmt.Errorf("%s 是内网/回环地址，没有公网归属地信息", ip)
 	}
-	// 注意不能带尾斜杠：ip-api 会把 "1.2.3.4/" 当成非法查询串
+	// 注意不能带尾斜杠：ipwho.is 会把 "1.2.3.4/" 当成非法查询串
 	return a.fetchIPGeo(url.PathEscape(ip))
 }

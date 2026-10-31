@@ -21,10 +21,10 @@
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| 节点列表 | ✅ 可用 | 从 `https://cf-v2.uapis.cn/node` 获取，无需 Token |
+| 节点数据 | ✅ 可用 | 从 `https://cf-v2.uapis.cn/node` 自动拉取并渲染为节点卡片，无需 Token |
 | 延迟测速 | ✅ 可用 | 真实 TCPing；并行探测 `7000`、`80`、`81` 端口，按丢包率和延迟排序 |
 | CSV / PNG 导出 | ✅ 可用 | 通过系统保存对话框导出 |
-| 本机 IP / 公网归属地 | ✅ 可用 | 本机地址由系统枚举，公网信息来自 ip-api.com |
+| 本机 IP / 公网归属地 | ✅ 可用 | 本机地址由系统枚举，公网信息来自 ipwho.is |
 | 托盘、开机自启、主题 | ✅ 可用 | 开机自启行为随平台实现不同 |
 | OAuth2/OIDC 登录 | ✅ 可用 | 内置 Public Client `client_id`，浏览器确认设备码授权，支持环境变量覆盖 |
 | 带宽测速 | ✅ 可用 | frpc 隧道 + 本地回环实测上下行吞吐；需登录，测速期间临时创建隧道（占用 1 个配额并消耗流量），测完立即删除 |
@@ -129,7 +129,7 @@ npm run dev
 
 - [CHMLFrp v2 API](https://cf-v2.uapis.cn)：获取节点列表；带宽测速时创建/删除临时隧道。
 - [frpc 下载表](https://cf-v1.uapis.cn/download/frpc/frpc_info.json)：按平台拉取 frpc 客户端（sha256 校验后缓存，不随程序分发）。
-- [ip-api.com](http://ip-api.com)：查询公网 IP 的地理位置、运营商和 ASN；免费接口有访问频率限制。
+- [ipwho.is](https://ipwho.is)：查询公网 IP 的地理位置、运营商、ASN、时区与旗帜；免密钥，1000 次/天。
 - QZhua OIDC 服务：仅在配置 `QZHUA_CLIENT_ID` 后用于账户登录。
 
 ## 法律与隐私

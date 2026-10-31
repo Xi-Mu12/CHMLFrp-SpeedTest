@@ -1,28 +1,19 @@
-// nodes.go —— ChmlFrp 节点拉取 / 过滤 / 候选解析
-// 设计说明（对标 CloudflareSpeedTest）：
+// nodes.go —— ChmlFrp 节点列表拉取 / 分组过滤 / 节点真实 IP 获取
+// 设计说明：
 //
-//	CFST 是同一服务测一堆 AnyCast IP；ChmlFrp 是多个离散节点（不同机房/域名/端口），
-//	所以第一步是先拿到“测谁”——即候选地址列表。
-//	Token 留空时走“隧道地址模式”（你已经在用的方式）：每个节点建一条隧道，
-//	把公网地址逐行写进 nodes.txt 来批量测。Token 填上后可升级为自动拉取 nodeinfo。
+//	ChmlFrp 是多个离散节点（不同机房/域名/端口），节点元信息走公开接口 /node，
+//	节点的真实 IP 走受保护接口 /nodeinfo（需 Bearer access_token）。
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
 )
-
-// TODO: 在这里填你的 ChmlFrp 用户 Token，留空则跳过需要鉴权的接口（/nodeinfo）。
-// 获取方式：官网管理面板 -> 用户信息 -> 令牌。
-// 填上后可自动获取节点真实 IP/端口/在线状态，无需手写 nodes.txt。
-var UserToken = ""
 
 // ApiBase v2 统一调用地址
 const ApiBase = "https://cf-v2.uapis.cn"
@@ -267,74 +258,4 @@ func FilterNodesByGroup(nodes []NodeBasic, group string) []NodeBasic {
 		}
 	}
 	return out
-}
-
-// Candidate 一个待测地址（通常是你为该节点建的隧道的公网地址 host:port）
-type Candidate struct {
-	Name string // 节点名/备注
-	Addr string // host:port，例如 cd.4.frp.one:35333
-}
-
-// ParseCandidatesFile 解析 nodes.txt，支持以下格式（# 开头为注释）：
-//
-//	cd.4.frp.one:35333
-//	南京多线,cd.4.frp.one:35333
-//	南京多线|cd.4.frp.one:35333
-//	南京多线 cd.4.frp.one:35333
-func ParseCandidatesFile(path string) ([]Candidate, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var out []Candidate
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 64*1024)
-	lineNo := 0
-	for sc.Scan() {
-		lineNo++
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// 去掉行内注释 "addr # 备注"
-		if i := strings.Index(line, "#"); i >= 0 {
-			line = strings.TrimSpace(line[:i])
-		}
-		var name, addr string
-		switch {
-		case strings.Contains(line, ","):
-			p := strings.SplitN(line, ",", 2)
-			name, addr = strings.TrimSpace(p[0]), strings.TrimSpace(p[1])
-		case strings.Contains(line, "|"):
-			p := strings.SplitN(line, "|", 2)
-			name, addr = strings.TrimSpace(p[0]), strings.TrimSpace(p[1])
-		case strings.Contains(line, " ") || strings.Contains(line, "\t"):
-			p := strings.Fields(line)
-			if len(p) >= 2 {
-				name, addr = p[0], p[1]
-			} else {
-				addr = p[0]
-			}
-		default:
-			addr = line
-		}
-		if addr == "" {
-			return nil, fmt.Errorf("第 %d 行地址为空", lineNo)
-		}
-		if !strings.Contains(addr, ":") {
-			return nil, fmt.Errorf("第 %d 行格式应为 host:port， got %q", lineNo, line)
-		}
-		if name == "" {
-			name = addr
-		}
-		out = append(out, Candidate{Name: name, Addr: addr})
-	}
-	if err := sc.Err(); err != nil {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("候选文件为空: %s", path)
-	}
-	return out, nil
 }

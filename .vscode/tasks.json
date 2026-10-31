@@ -1,0 +1,48 @@
+{
+  "version": "2.0.0",
+  "options": {
+    "cwd": "${workspaceFolder}",
+    "shell": {
+      "executable": "cmd.exe",
+      "args": ["/d", "/c"]
+    }
+  },
+  "tasks": [
+    {
+      "label": "wails build -clean",
+      "detail": "清理后完整生产构建 → build/bin/CHMLFrp-SpeedTest.exe",
+      "type": "shell",
+      "command": "C:\\Users\\Administrator\\go\\bin\\wails.exe",
+      "args": ["build", "-clean"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "wails build",
+      "detail": "增量构建（保留 build/bin 原有产物）",
+      "type": "shell",
+      "command": "C:\\Users\\Administrator\\go\\bin\\wails.exe",
+      "args": ["build"],
+      "group": "build",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "wails dev",
+      "detail": "开发模式：前端热重载、Go 改动自动重启",
+      "type": "shell",
+      "command": "C:\\Users\\Administrator\\go\\bin\\wails.exe",
+      "args": ["dev"],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "go test（desktop,production）",
+      "detail": "跑非 GUI 单元测试",
+      "type": "shell",
+      "command": "go",
+      "args": ["test", "-tags", "desktop,production", "./..."],
+      "group": "test",
+      "problemMatcher": ["$go"]
+    }
+  ]
+}
