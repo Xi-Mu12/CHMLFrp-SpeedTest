@@ -15,12 +15,12 @@ import (
 // App Wails 后端：节点查询走真实 /node 接口（见 nodes.go），
 // 延迟测速走 prefer.go 的真实 TCPing，带宽测速走 bwtest.go 的 frpc 隧道 + 本地回环。
 type App struct {
-	ctx          context.Context
-	speedRun     int64 // 测速轮次 id，+1 即取消上一轮
-	speedPaused  int32
-	bwBusy       int32 // 带宽测速占用标志：0 空闲 / 1 正在跑，防止重复进入
-	preferRun    int64 // 延迟测速轮次 id，+1 即取消
-	preferPaused int32
+	ctx         context.Context
+	speedRun    int64 // 测速轮次 id，+1 即取消上一轮
+	speedPaused int32
+	bwBusy      int32       // 带宽测速占用标志：0 空闲 / 1 正在跑，防止重复进入
+	preferRun   int64       // 延迟测速轮次 id，+1 即取消
+	quitting    atomic.Bool // 已进入退出流程：OnBeforeClose 不再拦截
 
 	// 登录态。authMu 保护下面这些字段，refreshMu 只用于串行化令牌续期，
 	// 分开是为了避免「续期中又去读 token」时自锁。
@@ -49,9 +49,12 @@ func NewApp() *App {
 	return &App{authRemember: true}
 }
 
-// startup 在应用启动时调用，保存 context 以便调用运行时方法
+// startup 在应用启动时调用，保存 context 以便调用运行时方法。
+// 配置必须在这里读出来：Alt+F4 / 任务栏关闭会直接走 OnBeforeClose，
+// 那时前端还没机会把设置同步过来。
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.loadSettings()
 }
 
 // NodeItem 前端用的简化节点
@@ -111,7 +114,6 @@ type SpeedTick struct {
 
 // SpeedDone 单次测速汇总
 type SpeedDone struct {
-	Addr      string  `json:"addr"`
 	UpAvg     float64 `json:"upAvg"`
 	DownAvg   float64 `json:"downAvg"`
 	UpPeak    float64 `json:"upPeak"`

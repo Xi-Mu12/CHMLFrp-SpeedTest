@@ -12,6 +12,10 @@ import (
 // 用原子变量记录，避免 systray 回调线程与 Wails 主线程竞争。
 var windowHidden int32
 
+// trayReady 表示托盘是否真的初始化成功。Linux 无托盘环境时 systray 可能
+// 不触发 onReady，此时“关闭即隐藏”会把窗口藏到找不回来，需要降级为询问。
+var trayReady atomic.Bool
+
 // trayIconData 由平台分支文件提供（icon_windows.go / icon_unix.go）：
 // Windows 用 icon.ico，macOS / Linux 用 appicon.png。
 
@@ -28,6 +32,7 @@ func (a *App) startTray() {
 
 // onTrayReady 在 systray 初始化完成后执行：设置图标、标题、菜单、点击行为。
 func onTrayReady(a *App) {
+	trayReady.Store(true)
 	if len(trayIconData) > 0 {
 		systray.SetIcon(trayIconData)
 	}
@@ -116,6 +121,10 @@ func (a *App) HideToTray() {
 
 // QuitApp 供前端调用：真正退出程序（会关闭托盘）。
 func (a *App) QuitApp() {
+	// 重复调用（托盘菜单 + 前端弹窗）只执行一次；同时让 OnBeforeClose 放行。
+	if !a.quitting.CompareAndSwap(false, true) {
+		return
+	}
 	// 让正在跑的测速收尾，并兜底杀掉 frpc / 删除临时隧道，避免残留进程与配额占用
 	atomic.AddInt64(&a.speedRun, 1)
 	atomic.AddInt64(&a.preferRun, 1)
