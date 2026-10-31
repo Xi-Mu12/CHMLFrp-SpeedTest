@@ -1,5 +1,5 @@
 import './style.css';
-import { GetNodes, StartPrefer, CancelPrefer, PausePrefer, ResumePrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, QuitApp, GetLocalIPs, GetMyIPInfo, QueryIPInfo } from '../wailsjs/go/main/App';
+import { GetNodes, StartPrefer, CancelPrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, QuitApp, GetLocalIPs, GetMyIPInfo, QueryIPInfo, RequestClose, SetCloseAction, GetSettings, SaveSettings } from '../wailsjs/go/main/App';
 import { EventsOn, WindowMinimise, WindowToggleMaximise, WindowGetPosition, WindowSetPosition, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { StartQZhuaLogin, LogoutQZhua, CancelQZhuaLogin, RestoreSession, SetRememberLogin } from '../wailsjs/go/main/App';
 
@@ -14,12 +14,14 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ESC_MAP[c
 // 弹窗必须位于页面根部，才能越过内容区的层叠上下文并遮住标题栏和侧栏。
 document.querySelectorAll('.bandwidth-modal').forEach((modal) => document.body.append(modal));
 
-// ---------- 设置持久化 ----------
-const settings = {
-    get addr() { return localStorage.getItem('tunnelAddr') || ''; },
-    set addr(v) { localStorage.setItem('tunnelAddr', v); },
-    get secs() { return parseInt(localStorage.getItem('testSecs') || '10', 10); },
-    set secs(v) { localStorage.setItem('testSecs', String(v)); },
+// ---------- 设置（Go settings.json 的运行时快照） ----------
+// 测速参数不在 localStorage 里存第二份：后端启动时读 settings.json，
+// 设置页保存后返回实际生效值（可能被后端 clamp）。
+const settings = { testSeconds: 10, bwParallel: 6 };
+const clampInt = (value, min, max, fallback) => {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
 };
 // 已选卡片（多选，点击卡片切换，全选按钮批量，持久化）
 const selected = new Set(JSON.parse(localStorage.getItem('pickedNodeIds') || '[]'));
@@ -41,16 +43,62 @@ document.querySelectorAll('.nav-item').forEach((btn) => {
 $('tbMin').addEventListener('click', () => WindowMinimise());
 $('tbMax').addEventListener('click', () => WindowToggleMaximise());
 // ---------- 关闭窗口行为：直接缩到托盘 / 弹窗询问 ----------
-const CLOSE_PREF_KEY = 'closeAction'; // 'tray' = 直接最小化到托盘；未设置 = 每次点击 × 询问
-function closeActionIsTray() { return localStorage.getItem(CLOSE_PREF_KEY) === 'tray'; }
-function syncTraySwitch() { $('setTray').checked = closeActionIsTray(); }
-$('tbClose').addEventListener('click', () => {
-    if (closeActionIsTray()) { HideToTray(); return; }
+// 偏好以 Go 侧为准：Alt+F4、任务栏关闭和标题栏 × 都会在 Go 的 OnBeforeClose
+// 里判断，只存 localStorage 覆盖不到前两者。
+let closeAction = 'ask';
+function syncTraySwitch() { $('setTray').checked = closeAction === 'tray'; }
+async function saveCloseAction(action) {
+    const next = action === 'tray' ? 'tray' : 'ask';
+    await SetCloseAction(next);
+    closeAction = next;
+    syncTraySwitch();
+}
+async function initSettings() {
+    let s = null;
+    try { s = await GetSettings(); } catch { /* 绑定不可用时按默认值处理 */ }
+    if (!s) s = { testSeconds: 10, bwParallel: 6, closeAction: '' };
+    if (!s.closeAction) {
+        // 从 A 组版本的 localStorage 迁移一次；迁移后以 Go settings.json 为准。
+        s.closeAction = localStorage.getItem('closeAction') === 'tray' ? 'tray' : 'ask';
+        try {
+            await SaveSettings({
+                testSeconds: s.testSeconds,
+                bwParallel: s.bwParallel,
+                closeAction: s.closeAction,
+            });
+        } catch { /* 保存失败也不阻塞启动 */ }
+        localStorage.removeItem('closeAction');
+    }
+    settings.testSeconds = clampInt(s.testSeconds, 5, 60, 10);
+    settings.bwParallel = clampInt(s.bwParallel, 1, 8, 6);
+    closeAction = s.closeAction === 'tray' ? 'tray' : 'ask';
+    if ($('setTestSeconds')) $('setTestSeconds').value = String(settings.testSeconds);
+    if ($('setBWParallel')) $('setBWParallel').value = String(settings.bwParallel);
+    syncTraySwitch();
+}
+async function saveTestSettings() {
+    const secs = clampInt($('setTestSeconds').value, 5, 60, settings.testSeconds);
+    const parallel = clampInt($('setBWParallel').value, 1, 8, settings.bwParallel);
+    try {
+        const saved = await SaveSettings({ testSeconds: secs, bwParallel: parallel, closeAction });
+        settings.testSeconds = clampInt(saved.testSeconds, 5, 60, 10);
+        settings.bwParallel = clampInt(saved.bwParallel, 1, 8, 6);
+        $('setTestSeconds').value = String(settings.testSeconds);
+        $('setBWParallel').value = String(settings.bwParallel);
+        appendLog('prefer', 'ok', `测速参数已保存：单节点 ${settings.testSeconds} 秒 · 单方向 ${settings.bwParallel} 条连接`);
+    } catch (err) {
+        $('setTestSeconds').value = String(settings.testSeconds);
+        $('setBWParallel').value = String(settings.bwParallel);
+        appendLog('prefer', 'err', '保存测速参数失败：' + err);
+    }
+}
+$('tbClose').addEventListener('click', () => { RequestClose(); });
+EventsOn('closeRequested', () => {
+    // Go 侧判断为“询问”时才会发这个事件；窗口已被拦住，不会退出。
     $('closeAskModal').classList.remove('hidden');
 });
-$('closeAskTray').addEventListener('click', () => {
-    localStorage.setItem(CLOSE_PREF_KEY, 'tray');
-    syncTraySwitch();
+$('closeAskTray').addEventListener('click', async () => {
+    try { await saveCloseAction('tray'); } catch { return; }
     $('closeAskModal').classList.add('hidden');
     HideToTray();
 });
@@ -59,10 +107,16 @@ $('closeAskExit').addEventListener('click', () => {
     QuitApp();
 });
 $('closeAskBackdrop').addEventListener('click', () => $('closeAskModal').classList.add('hidden'));
-$('setTray').addEventListener('change', (e) => {
-    if (e.target.checked) localStorage.setItem(CLOSE_PREF_KEY, 'tray');
-    else localStorage.removeItem(CLOSE_PREF_KEY);
+$('setTray').addEventListener('change', async (e) => {
+    try {
+        await saveCloseAction(e.target.checked ? 'tray' : 'ask');
+    } catch (err) {
+        e.target.checked = closeAction === 'tray';
+        appendLog('prefer', 'err', '保存关闭行为失败：' + err);
+    }
 });
+$('setTestSeconds').addEventListener('change', saveTestSettings);
+$('setBWParallel').addEventListener('change', saveTestSettings);
 syncTraySwitch();
 
 let qzhuaLoggedIn = false;
@@ -472,14 +526,33 @@ const drawSpeedChart = () => {
         chart.appendChild(svg);
     });
 };
+// 带宽测速按钮的门槛：没加载节点、没选节点都不允许开始。
+// 运行中保留“暂停/继续”（长任务有意义），所以只在空闲态禁用。
+function updateBandwidthRunUI() {
+    const btn = $('speedBtn');
+    if (!btn) return;
+    if (speedRunning) {
+        btn.disabled = false;
+        btn.textContent = speedPaused ? '继续' : '暂停';
+        btn.title = speedPaused ? '继续打流' : '暂停打流（总时长会顺延）';
+        btn.classList.toggle('speed-resume', speedPaused);
+        return;
+    }
+    btn.classList.remove('speed-resume');
+    const ready = nodes.length > 0 && selected.size > 0;
+    btn.disabled = !ready;
+    btn.textContent = '开始测速';
+    btn.title = !nodes.length ? '请先刷新加载节点' : (selected.size === 0 ? '请先选择至少一个节点' : '');
+}
+
 const setSpeedRunning = (running) => {
     speedRunning = running;
     bandwidthRunning = running;
     if (!running) speedPaused = false;
     $('speedBtn').classList.remove('hidden');
     $('speedCancelBtn').classList.toggle('hidden', !running);
-    $('speedBtn').textContent = speedPaused ? '继续' : (running ? '暂停' : '开始测速');
-    $('speedBtn').classList.toggle('speed-resume', speedPaused);
+    updateBandwidthRunUI();
+    updateExportUI();
 };
 EventsOn('speed', (ev) => {
     const sampleSecond = Math.floor(ev.elapsed);
@@ -532,7 +605,7 @@ EventsOn('speedNodeDone', (ev) => {
         down: formatSpeed(ev.downAvg),
         up: formatSpeed(ev.upAvg),
         average: formatSpeed((ev.downAvg + ev.upAvg) / 2),
-        duration: String(ev.seconds || settings.secs),
+        duration: String(ev.seconds || settings.testSeconds),
         error: '',
     });
     if (key !== '__last__') bandwidthResults.delete('__last__');
@@ -547,7 +620,7 @@ EventsOn('speedDone', (ev) => {
     if ($('detailDown')) $('detailDown').textContent = `${formatSpeed(ev.downAvg)} Mbps`;
     if ($('detailUp')) $('detailUp').textContent = `${formatSpeed(ev.upAvg)} Mbps`;
     if ($('detailAverage')) $('detailAverage').textContent = `${formatSpeed((ev.downAvg + ev.upAvg) / 2)} Mbps`;
-    if ($('detailDuration')) $('detailDuration').textContent = settings.secs + ' 秒';
+    if ($('detailDuration')) $('detailDuration').textContent = settings.testSeconds + ' 秒';
     if ($('speedProgress')) $('speedProgress').innerHTML = `${ev.cancelled ? '已停止' : '完成'}`;
     $('bandwidthProgressFill').style.width = ev.cancelled ? '0%' : '100%';
     $('speedElapsed').textContent = ev.cancelled ? '测速已停止' : '测速完成';
@@ -557,12 +630,11 @@ EventsOn('speedDone', (ev) => {
     else renderBandwidthLeaderboard();
     if (ev.cancelled) resetRings();
     if (ev.cancelled) {
-        appendSpeedLog('warn', `测速已停止 · 地址 ${ev.addr}`);
+        appendSpeedLog('warn', '测速已停止');
     } else {
         appendSpeedLog('ok', `测速完成 · 下载 ${formatSpeed(ev.downAvg)} Mbps · 上传 ${formatSpeed(ev.upAvg)} Mbps · 峰值 ${formatSpeed(ev.downPeak)}/${formatSpeed(ev.upPeak)}`);
     }
-    const hasData = [...bandwidthResults.entries()].some(([k, r]) => k !== '__last__' && r && (r.delay !== undefined || r.down));
-    $('bandwidthExportBtn').disabled = !hasData;
+    updateExportUI();
 });
 // 后端判定未登录 / 登录已过期（带宽测速要建临时隧道，没有令牌跑不了）
 EventsOn('speedNeedLogin', () => {
@@ -589,13 +661,16 @@ const startSpeedRun = async () => {
     $('speedElapsed').textContent = '正在连接';
     const currentNode = nodes.find((node) => selected.has(String(node.id)));
     $('currentSpeedNode').textContent = currentNode?.name || '当前测速任务';
-    appendSpeedLog('info', `开始测速：${currentNode?.name || '全部节点'} · 单节点 ${settings.secs}s · 每个节点会临时建隧道并启动 frpc`);
-    $('bandwidthExportBtn').disabled = true;
+    const targetLabel = selected.size === 1 && currentNode ? currentNode.name : `已选 ${selected.size} 个节点`;
+    appendSpeedLog('info', `开始测速：${targetLabel} · 单节点 ${settings.testSeconds}s · 单方向 ${settings.bwParallel} 条连接 · 每个节点会临时建隧道并启动 frpc`);
     closeExportMenu('bandwidth');
     setSpeedRunning(true);
     speedStarting = true;
     try {
-        await StartSpeedTest(settings.addr, settings.secs, selected.size ? [...selected].map(Number) : []);
+        await StartSpeedTest(settings.testSeconds, settings.bwParallel, [...selected].map(Number));
+    } catch (err) {
+        setSpeedRunning(false);
+        appendSpeedLog('err', '启动带宽测速失败：' + err);
     } finally {
         speedStarting = false;
     }
@@ -617,17 +692,35 @@ $('speedBtn').addEventListener('click', async () => {
         openLoginModal();
         return;
     }
+    // 带宽测速会真实占用隧道配额和流量，必须让用户明确选节点，不能默认全测。
+    if (!nodes.length) {
+        appendSpeedLog('warn', '请先刷新加载节点，再选择要测速的节点');
+        updateBandwidthRunUI();
+        return;
+    }
+    if (selected.size === 0) {
+        appendSpeedLog('warn', '请先选择至少一个节点');
+        updateBandwidthRunUI();
+        return;
+    }
     // 静态确认弹窗：只显示一次性的任务信息，测速过程中不刷新
-    const count = selected.size || nodes.length;
+    const count = selected.size;
     $('taskNodeCount').textContent = String(count);
-    $('taskSecs').textContent = String(settings.secs);
+    $('taskSecs').textContent = String(settings.testSeconds);
+    $('taskParallel').textContent = String(settings.bwParallel);
     // 每节点还要建隧道 + 起 frpc（约 5~10 秒），预估时长按“单节点时长 + 10 秒”算
-    $('taskEta').textContent = `约 ${count * (settings.secs + 10)} 秒`;
+    $('taskEta').textContent = `约 ${count * (settings.testSeconds + 10)} 秒`;
     $('speedTaskModal').classList.remove('hidden');
 });
 $('taskStartBtn').addEventListener('click', () => {
     // 连点会触发两轮并发测速，后端虽有兜底，前端也不该把请求发出去
     if (speedStarting || speedRunning) return;
+    if (selected.size === 0) {
+        $('speedTaskModal').classList.add('hidden');
+        appendSpeedLog('warn', '请先选择至少一个节点');
+        updateBandwidthRunUI();
+        return;
+    }
     $('speedTaskModal').classList.add('hidden');
     startSpeedRun();
 });
@@ -698,10 +791,14 @@ function preferCardHTML(n) {
         ? '<span class="pill vip">VIP</span>'
         : '<span class="pill user">普通</span>';
     const d = results.get(n.id);
-    const delayText = d === undefined ? '--' : (d < 0 ? '超时' : `${d}ms`);
-    const delayClass = d === undefined ? '' : `delay-value ${d < 0 ? 'slow' : delayTone(d)}`;
-    // TCPing 统计：未测过显示 --，测过显示真实次数/丢包率
+    // TCPing 失败但 ICMP 在线：显示 ICMP 延迟而不是"超时"。
+    // ICMP 结果存在 preferStats（finish 后 buildGroups 重渲染卡片也走这里，
+    // 否则测速中显示的 ICMP 会被重渲染打回"超时"）。
     const st = preferStats.get(n.id);
+    const icmpOnline = d !== undefined && d < 0 && typeof st?.icmp === 'number' && st.icmp >= 0;
+    const delayText = d === undefined ? '--' : (d < 0 ? (icmpOnline ? `ICMP ${Math.round(st.icmp)}ms` : '超时') : `${d}ms`);
+    const delayClass = d === undefined ? '' : `delay-value ${d < 0 ? (icmpOnline ? 'medium' : 'slow') : delayTone(d)}`;
+    // TCPing 统计：未测过显示 --，测过显示真实次数/丢包率
     const sentText = st ? `${st.sent} 次` : '--';
     const recvText = st ? `${st.recv} 次` : '--';
     const lossText = st ? `${Math.round(st.loss * 100)}%` : '--';
@@ -860,6 +957,7 @@ function buildGroups() {
     ensureLoginHint(wrap);
     updateSelUI();
     buildBandwidthGroups();
+    updateExportUI();
 }
 
 function buildBandwidthGroups() {
@@ -902,6 +1000,8 @@ function buildBandwidthGroups() {
         wrap.appendChild(el);
     }
     ensureLoginHint(wrap);
+    updateBandwidthRunUI();
+    updateExportUI();
 }
 
 function showBandwidthDetail(node) {
@@ -918,13 +1018,17 @@ function showPreferDetail(node) {
     const delay = results.get(node.id);
     const timedOut = delay !== undefined && delay < 0;
     const st = preferStats.get(node.id);
+    // 与卡片渲染一致：TCPing 失败但 ICMP 在线时，明确说明是端口被拦、节点在线
+    const icmpOnline = timedOut && typeof st?.icmp === 'number' && st.icmp >= 0;
     $('preferDetail').classList.remove('hidden');
     $('preferDetailName').textContent = node.name;
     $('preferDetailRegion').textContent = `${regionLabel(node.china)} · #${node.id}`;
     $('preferDetailStatus').textContent = delay === undefined
         ? '尚未完成测速'
-        : (timedOut ? '所有端口不可达' : (st?.port ? `测速已完成 · 端口 ${st.port}` : '测速已完成'));
-    $('preferDelay').textContent = delay === undefined ? '--' : (timedOut ? '超时' : `${delay} ms`);
+        : (timedOut
+            ? (icmpOnline ? '端口被防火墙拦截 · 节点在线（无法TCPing）' : '所有端口不可达')
+            : (st?.port ? `测速已完成 · 端口 ${st.port}` : '测速已完成'));
+    $('preferDelay').textContent = delay === undefined ? '--' : (timedOut ? (icmpOnline ? `ICMP ${Math.round(st.icmp)} ms` : '超时') : `${delay} ms`);
     $('preferSent').textContent = st ? `${st.sent} 次` : '暂无数据';
     $('preferReceived').textContent = st ? `${st.recv} 次` : '暂无数据';
     $('preferLoss').textContent = st ? `${Math.round(st.loss * 100)}%` : '暂无数据';
@@ -1019,15 +1123,14 @@ function renderLoginOnly() {
     ['filterCount', 'bandwidthFilterCount'].forEach((id) => { if ($(id)) $(id).textContent = '0 个节点'; });
     if ($('preferStatus')) $('preferStatus').textContent = '请先登录账号';
     if ($('currentSpeedNode')) $('currentSpeedNode').textContent = '请先登录账号';
-    // 没有数据就没有可导出的内容
-    if ($('preferExportBtn')) $('preferExportBtn').disabled = true;
-    if ($('bandwidthExportBtn')) $('bandwidthExportBtn').disabled = true;
     ['groups', 'bandwidthGroups'].forEach((id) => {
         const box = $(id);
         if (!box) return;
         box.innerHTML = '';
         box.appendChild(makeLoginHint());
     });
+    updateBandwidthRunUI();
+    updateExportUI();
 }
 
 let nodesLoading = false;
@@ -1118,20 +1221,21 @@ $('bandwidthSelectAllBtn').addEventListener('click', () => {
 
 // ---------- 延迟测速流（后端事件驱动：TCPing 粗筛） ----------
 let preferRunning = false;
-let preferPaused = false;
 let preferTotal = 0;
 
 function setPreferBtn(running) {
-    $('preferBtn').textContent = preferPaused ? '继续' : (running ? '暂停' : '开始测速');
-    $('preferBtn').classList.toggle('speed-resume', preferPaused);
+    const btn = $('preferBtn');
+    btn.textContent = running ? '测速中…' : '开始测速';
+    btn.disabled = running;
+    btn.classList.remove('speed-resume');
     $('preferCancelBtn').classList.toggle('hidden', !running);
+    updateExportUI();
 }
 
 EventsOn('preferEvent', (ev) => {
     switch (ev.kind) {
         case 'start':
             preferRunning = true;
-            preferPaused = false;
             preferTotal = ev.total;
             results.clear();
             preferStats.clear();
@@ -1152,7 +1256,6 @@ EventsOn('preferEvent', (ev) => {
             });
             setPreferBtn(true);
             $('refreshBtn').disabled = true;
-            $('preferExportBtn').disabled = true;
             closeExportMenu('prefer');
             $('preferStatus').textContent = '准备测速';
             $('preferProgressFill').style.width = '0%';
@@ -1169,16 +1272,22 @@ EventsOn('preferEvent', (ev) => {
 
         case 'node': {
             results.set(ev.nodeId, ev.delay);
-            preferStats.set(ev.nodeId, { sent: ev.sent, recv: ev.recv, loss: ev.loss, port: ev.port });
+            preferStats.set(ev.nodeId, { sent: ev.sent, recv: ev.recv, loss: ev.loss, port: ev.port, icmp: ev.icmpDelay });
+            // TCPing 失败但 ICMP 在线 = 节点活着、端口被防火墙拦截，与真超时区分展示
+            const icmpOnline = ev.delay < 0 && typeof ev.icmpDelay === 'number' && ev.icmpDelay >= 0;
             $('preferProgressFill').style.width = `${Math.round(ev.index / ev.total * 100)}%`;
-            $('preferStatus').textContent = `${ev.name} · ${ev.delay < 0 ? '超时' : `${ev.delay}ms`}`;
+            $('preferStatus').textContent = `${ev.name} · ${ev.delay < 0
+                ? (icmpOnline ? `端口拦截 · 节点在线 ${Math.round(ev.icmpDelay)}ms` : '超时')
+                : `${ev.delay}ms`}`;
             const card = cardById(ev.nodeId);
             if (card) {
                 card.classList.remove('testing');
                 const delayValue = card.querySelector('[data-delay-value]');
                 if (delayValue) {
-                    delayValue.textContent = ev.delay < 0 ? '超时' : `${ev.delay}ms`;
-                    delayValue.className = `delay-value ${ev.delay < 0 ? 'slow' : delayTone(ev.delay)}`;
+                    delayValue.textContent = ev.delay < 0
+                        ? (icmpOnline ? `ICMP ${Math.round(ev.icmpDelay)}ms` : '超时')
+                        : `${ev.delay}ms`;
+                    delayValue.className = `delay-value ${ev.delay < 0 ? (icmpOnline ? 'medium' : 'slow') : delayTone(ev.delay)}`;
                 }
                 // TCPing 统计同步上卡
                 const setStat = (key, text) => {
@@ -1191,18 +1300,18 @@ EventsOn('preferEvent', (ev) => {
             }
             if (ev.delay >= 0) {
                 appendLog('prefer', 'ok', `#${ev.nodeId} ${ev.name} · 延迟 ${ev.delay}ms · 端口 ${ev.port}`);
+            } else if (icmpOnline) {
+                appendLog('prefer', 'warn', `#${ev.nodeId} ${ev.name} · 端口被防火墙拦截，节点在线（ICMP ${Math.round(ev.icmpDelay)}ms）· 无法建隧道，不参与排名`);
             } else {
-                appendLog('prefer', 'err', `#${ev.nodeId} ${ev.name} · 超时（7000/80/81 端口均不可达，节点可能未运行 frps）`);
+                appendLog('prefer', 'err', `#${ev.nodeId} ${ev.name} · 超时（端口不通且 ping 无响应，节点可能离线）`);
             }
             break;
         }
 
         case 'finish': {
             preferRunning = false;
-            preferPaused = false;
             setPreferBtn(false);
             $('refreshBtn').disabled = false;
-            $('preferExportBtn').disabled = false;
             document.querySelectorAll('.node-card').forEach((c) => c.classList.remove('testing'));
             if (ev.result && ev.result.length) {
                 renderPreferLeaderboard(ev.result);
@@ -1224,10 +1333,8 @@ EventsOn('preferEvent', (ev) => {
         case 'needLogin':
             // 后端确认拿不到节点 IP 且未登录：这不是“取消”，要引导去登录
             preferRunning = false;
-            preferPaused = false;
             setPreferBtn(false);
             $('refreshBtn').disabled = false;
-            $('preferExportBtn').disabled = false;
             document.querySelectorAll('.node-card.testing').forEach((c) => c.classList.remove('testing'));
             $('preferStatus').textContent = '请先登录账号';
             $('preferProgressFill').style.width = '0%';
@@ -1238,10 +1345,8 @@ EventsOn('preferEvent', (ev) => {
 
         case 'error':
             preferRunning = false;
-            preferPaused = false;
             setPreferBtn(false);
             $('refreshBtn').disabled = false;
-            $('preferExportBtn').disabled = false;
             document.querySelectorAll('.node-card.testing').forEach((c) => c.classList.remove('testing'));
             $('preferStatus').textContent = '测速无法开始';
             $('preferProgressFill').style.width = '0%';
@@ -1250,10 +1355,8 @@ EventsOn('preferEvent', (ev) => {
 
         case 'cancel':
             preferRunning = false;
-            preferPaused = false;
             setPreferBtn(false);
             $('refreshBtn').disabled = false;
-            $('preferExportBtn').disabled = false;
             document.querySelectorAll('.node-card.testing').forEach((c) => c.classList.remove('testing'));
             $('preferStatus').textContent = '测速已取消';
             $('preferProgressFill').style.width = '0%';
@@ -1263,15 +1366,8 @@ EventsOn('preferEvent', (ev) => {
 });
 
 $('preferBtn').addEventListener('click', async () => {
-    if (preferRunning) {
-        preferPaused = !preferPaused;
-        if (preferPaused) await PausePrefer();
-        else await ResumePrefer();
-        setPreferBtn(true);
-        $('preferStatus').textContent = preferPaused ? '已暂停，点击「继续」恢复' : '已恢复，继续测速';
-        appendLog('prefer', 'info', preferPaused ? '测速已暂停' : '测速已恢复');
-        return;
-    }
+    // 运行中按钮已禁用，暂停也已移除；这里只处理“开始”。
+    if (preferRunning) return;
     if (!qzhuaLoggedIn) {
         $('preferStatus').textContent = '请先登录账号';
         appendLog('prefer', 'warn', '未登录：延迟测速需要登录后获取节点真实 IP');
@@ -1281,12 +1377,38 @@ $('preferBtn').addEventListener('click', async () => {
     }
     if (!nodes.length) return;
     appendLog('prefer', 'info', selected.size ? `准备测速已选 ${selected.size} 个节点` : '准备测速全部节点');
-    await StartPrefer(selected.size ? [...selected].map(Number) : []);
+    try {
+        await StartPrefer(selected.size ? [...selected].map(Number) : []);
+    } catch (err) {
+        setPreferBtn(false);
+        $('preferStatus').textContent = '测速启动失败';
+        appendLog('prefer', 'err', '启动延迟测速失败：' + err);
+    }
 });
 $('preferCancelBtn').addEventListener('click', async () => {
     appendLog('prefer', 'warn', '用户点击停止测速');
     await CancelPrefer();
 });
+
+// 两个导出按钮共用同一套可用性规则：
+// 节点列表加载后即可导出（延迟/带宽报告都包含节点清单）；测速过程中先禁用，
+// 避免导出到一半的数据。这样登录/刷新/测速结束后不会出现两个页面状态不一致。
+function updateExportUI() {
+    const preferBtn = $('preferExportBtn');
+    if (preferBtn) {
+        preferBtn.disabled = nodes.length === 0 || preferRunning;
+        preferBtn.title = nodes.length === 0
+            ? '请先刷新加载节点'
+            : (preferRunning ? '测速结束后可导出' : '导出节点列表与延迟结果');
+    }
+    const bandwidthBtn = $('bandwidthExportBtn');
+    if (bandwidthBtn) {
+        bandwidthBtn.disabled = nodes.length === 0 || speedRunning;
+        bandwidthBtn.title = nodes.length === 0
+            ? '请先刷新加载节点'
+            : (speedRunning ? '测速结束后可导出' : '导出节点列表与带宽结果');
+    }
+}
 
 // ---------- 导出（节点列表 + 延迟测速结果）：CSV / 图片 ----------
 const preferExportRows = () => {
@@ -1297,6 +1419,9 @@ const preferExportRows = () => {
     const rows = [['编号', '名称', '区域', '节点组', '地域', '建站', 'UDP', '防御', '延迟(ms)', '延迟排名']];
     for (const n of nodes) {
         const d = results.get(n.id);
+        const st = preferStats.get(n.id);
+        // TCPing 超时但 ICMP 在线的节点，在导出里也注明，避免被当成节点离线
+        const icmpOnline = d !== undefined && d < 0 && typeof st?.icmp === 'number' && st.icmp >= 0;
         rows.push([
             n.id, n.name, n.area,
             n.group === 'vip' ? '会员' : '免费',
@@ -1304,7 +1429,7 @@ const preferExportRows = () => {
             n.web === 'yes' ? '是' : '否',
             n.udp ? '是' : '否',
             n.fangyu ? '是' : '否',
-            d === undefined ? '' : (d < 0 ? '超时' : d),
+            d === undefined ? '' : (d < 0 ? (icmpOnline ? `超时(ICMP ${Math.round(st.icmp)}ms在线)` : '超时') : d),
             rank.has(n.id) ? rank.get(n.id) : '',
         ]);
     }
@@ -1413,7 +1538,9 @@ function renderNodesTable() {
     const tbody = $('nodesTable').querySelector('tbody');
     tbody.innerHTML = list.map((n) => {
         const d = results.get(n.id);
-        const delayCell = d === undefined ? '--' : (d < 0 ? '超时' : `${d} ms`);
+        const st = preferStats.get(n.id);
+        const icmpOnline = d !== undefined && d < 0 && typeof st?.icmp === 'number' && st.icmp >= 0;
+        const delayCell = d === undefined ? '--' : (d < 0 ? (icmpOnline ? `ICMP ${Math.round(st.icmp)}ms` : '超时') : `${d} ms`);
         return `
         <tr>
             <td>#${n.id}</td><td>${esc(n.name)}</td><td>${esc(n.area || '-')}</td>
@@ -1439,20 +1566,25 @@ $('closeSpeedTask').addEventListener('click', () => $('speedTaskModal').classLis
 $('taskCloseBtn').addEventListener('click', () => $('speedTaskModal').classList.add('hidden'));
 
 // ---------- 导出带宽测速结果（CSV / 图片） ----------
+// 与延迟测速一致：加载节点后即可导出；未测速的节点保留在清单里，结果列留空。
+const hasBandwidthResult = (r) => Boolean(r && (r.down !== undefined || r.up !== undefined || r.delay !== undefined));
+
 const bandwidthExportRows = () => {
     const ts = new Date().toLocaleString('zh-CN');
     const rows = [['编号', '名称', '节点组', '地域', '延迟(ms)', '下载(Mbps)', '上传(Mbps)', '平均(Mbps)', '测速时长(秒)', '测速时间']];
-    for (const [key, r] of bandwidthResults) {
-        if (key === '__last__' || !r) continue;
-        if (r.delay === undefined && !r.down) continue;
-        const n = nodes.find((candidate) => String(candidate.id) === key);
-        if (!n) continue;
+    for (const n of nodes) {
+        const r = bandwidthResults.get(String(n.id));
+        const tested = hasBandwidthResult(r);
         rows.push([
             n.id, n.name,
             n.group === 'vip' ? '会员' : '普通',
             regionLabel(n.china),
-            r.delay ?? '', r.down ?? '', r.up ?? '', r.average ?? '',
-            r.duration ?? '', ts,
+            tested ? (r.delay ?? '') : '',
+            tested ? (r.down ?? '') : '',
+            tested ? (r.up ?? '') : '',
+            tested ? (r.average ?? '') : '',
+            tested ? (r.duration ?? '') : '',
+            tested ? ts : '',
         ]);
     }
     return rows;
@@ -1462,8 +1594,8 @@ const toCsvText = (rows) => '﻿' + rows.map((r) =>
 ).join('\r\n');
 
 const exportBandwidthCsv = async () => {
+    if (!nodes.length) return;
     const rows = bandwidthExportRows();
-    if (rows.length <= 1) return;
     try {
         const path = await SaveCSV(toCsvText(rows));
         if (path) {
@@ -1477,8 +1609,8 @@ const exportBandwidthCsv = async () => {
 };
 
 const exportBandwidthPng = async () => {
+    if (!nodes.length) return;
     const rows = bandwidthExportRows();
-    if (rows.length <= 1) return;
     const w = 980;
     const h = 640;
     const canvas = document.createElement('canvas');
@@ -1494,7 +1626,8 @@ const exportBandwidthPng = async () => {
     ctx.fillText('ChmlFrp 带宽测速报告', 36, 48);
     ctx.fillStyle = color('--muted', '#8b939e');
     ctx.font = '12px "Microsoft YaHei", sans-serif';
-    ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${rows.length - 1}　单次时长：${settings.secs} 秒`, 36, 74);
+    const tested = nodes.filter((n) => hasBandwidthResult(bandwidthResults.get(String(n.id)))).length;
+    ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　单次时长：${settings.testSeconds} 秒`, 36, 74);
     const cols = [36, 96, 330, 390, 470, 560, 650, 740];
     const headers = ['编号', '名称', '节点组', '地域', '延迟', '下载', '上传', '平均'];
     ctx.fillStyle = color('--dim', '#5c6570');
@@ -1549,7 +1682,7 @@ const exportBandwidthPng = async () => {
         });
     } else {
         ctx.fillStyle = color('--muted', '#8b939e');
-        ctx.fillText('暂无速率曲线数据', 36, chartTop + chartH / 2);
+        ctx.fillText(tested ? '暂无速率曲线数据' : '尚未测速，表格仅包含节点列表', 36, chartTop + chartH / 2);
     }
     try {
         const path = await SaveImage(canvas.toDataURL('image/png').split(',')[1]);
@@ -1774,7 +1907,7 @@ function renderIPGeo(geo, self) {
     card.innerHTML = `
         <div class="ip-geo-head">
             <div class="ip-geo-title"><b>${esc(geo.ip)}</b>${badge}</div>
-            <div class="ip-geo-sub"><span>${esc(place)}</span><span class="ip-geo-kind">IPv${geo.version || 4}${self ? ' · 当前出口' : ' · 指定查询'}</span></div>
+            <div class="ip-geo-sub"><span class="ip-geo-place">${esc(place)}</span><span class="ip-geo-kind">IPv${geo.version || 4}${self ? ' · 当前出口' : ' · 指定查询'}</span></div>
         </div>
         <div class="ip-geo-grid">${cells.map(([k, v, extra]) => `<div><span>${k}</span><b>${esc(v)}</b>${extra ? `<em>${esc(extra)}</em>` : ''}</div>`).join('')}</div>
         <p class="ip-geo-note">数据来源 ip-api.com · 免密钥，约 45 次/分钟 · 中文结果</p>`;
@@ -1858,6 +1991,8 @@ GetAutostart().then((on) => { $('setAutostart').checked = on; }).catch((err) => 
 // 先恢复登录态（过期会自动用 refresh_token 续期），再拉节点。
 // 未登录时 /node 仍能拉到节点，但拿不到真实 IP，界面顶部会显示登录引导。
 async function bootstrap() {
+    // 设置要在首批交互前就绪；失败不阻塞主流程。
+    await initSettings();
     let state = null;
     try {
         state = await RestoreSession();
