@@ -38,10 +38,7 @@ import (
 const (
 	bwRemotePortMin = 20000
 	bwRemotePortMax = 60000
-	// bwParallel 单方向并发连接数。单条 TCP 在长 RTT 下容易被接收窗口限住，
-	// 需要多条并发才能打满链路。分时测量后同一时刻只跑一个方向，
-	// 比原来双向各 4 条时更有余量，所以提到 6 条。
-	bwParallel     = 6
+	// 单方向并发连接数由设置页控制（1~8，默认 6），见 settings.go。
 	bwChunkSize    = 128 * 1024
 	bwTickInterval = 100 * time.Millisecond
 	bwDialTimeout  = 8 * time.Second
@@ -94,17 +91,17 @@ func (a *App) speedCancelled(runID int64) bool {
 	return atomic.LoadInt64(&a.speedRun) != runID
 }
 
-// StartSpeedTest 开始带宽测速（签名保持不变：addr 仅用于日志展示，真实目标由节点决定）
-func (a *App) StartSpeedTest(addr string, seconds int, ids []int) {
-	if seconds <= 0 || seconds > 120 {
-		seconds = 10
-	}
+// StartSpeedTest 开始带宽测速。
+// seconds/parallel 来自设置页，后端再 clamp 一次，避免旧配置或手工调用传入非法值。
+func (a *App) StartSpeedTest(seconds, parallel int, ids []int) {
+	seconds = normalizeTestSeconds(seconds)
+	parallel = normalizeBWParallel(parallel)
 	// 防重入：连点“开始测试”会让两轮同时建隧道、起 frpc，而 bwProc/bwTunnelID
 	// 只有单槽，后一轮会覆盖前一轮 → 旧的 frpc 杀不掉、临时隧道残留吃账号配额。
 	if !atomic.CompareAndSwapInt32(&a.bwBusy, 0, 1) {
 		a.emitSpeedLog("warn", "已有带宽测速任务在运行，请先停止或等它结束后再开始")
 		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "speedDone", SpeedDone{Addr: addr, Cancelled: true})
+			runtime.EventsEmit(a.ctx, "speedDone", SpeedDone{Cancelled: true})
 		}
 		return
 	}
@@ -112,17 +109,24 @@ func (a *App) StartSpeedTest(addr string, seconds int, ids []int) {
 	atomic.StoreInt32(&a.speedPaused, 0)
 	go func() {
 		defer atomic.StoreInt32(&a.bwBusy, 0)
-		a.runBandwidthTest(runID, addr, seconds, ids)
+		a.runBandwidthTest(runID, seconds, parallel, ids)
 	}()
 }
 
 // runBandwidthTest 整轮流程：登录校验 → 准备 frpc → 逐节点测速 → 汇总
-func (a *App) runBandwidthTest(runID int64, addr string, seconds int, ids []int) {
+func (a *App) runBandwidthTest(runID int64, seconds, parallel int, ids []int) {
 	fail := func(msg string) {
 		a.emitSpeedLog("err", msg)
 		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "speedDone", SpeedDone{Addr: addr, Cancelled: true})
+			runtime.EventsEmit(a.ctx, "speedDone", SpeedDone{Cancelled: true})
 		}
+	}
+
+	// 带宽测速会真实创建临时隧道、占用配额并消耗流量，不能像延迟测速那样
+	// “不选就测全部”。前端已经禁用按钮，这里再做一次后端兜底。
+	if len(ids) == 0 {
+		fail("带宽测速需要至少选择一个节点，请先在节点卡片上选择目标")
+		return
 	}
 
 	token := a.currentToken()
@@ -158,24 +162,21 @@ func (a *App) runBandwidthTest(runID int64, addr string, seconds int, ids []int)
 		fail("拉取节点列表失败：" + err.Error())
 		return
 	}
-	sel := allNodes
-	if len(ids) > 0 {
-		want := make(map[int]bool, len(ids))
-		for _, v := range ids {
-			want[v] = true
-		}
-		sel = nil
-		for _, n := range allNodes {
-			if want[n.ID] {
-				sel = append(sel, n)
-			}
+	sel := make([]NodeBasic, 0, len(ids))
+	want := make(map[int]bool, len(ids))
+	for _, v := range ids {
+		want[v] = true
+	}
+	for _, n := range allNodes {
+		if want[n.ID] {
+			sel = append(sel, n)
 		}
 	}
 	if len(sel) == 0 {
 		fail("没有可测节点")
 		return
 	}
-	a.emitSpeedLog("info", fmt.Sprintf("待测节点 %d 个，单节点 %d 秒（每节点含建隧道/起 frpc 约 5~10 秒）", len(sel), seconds))
+	a.emitSpeedLog("info", fmt.Sprintf("待测节点 %d 个，单节点 %d 秒，单方向 %d 条连接（每节点含建隧道/起 frpc 约 5~10 秒）", len(sel), seconds, parallel))
 
 	a.emitSpeedLog("info", "检查 frpc 客户端…")
 	frpcBin, err := ensureFrpc(func(pct float64, msg string) {
@@ -206,7 +207,7 @@ func (a *App) runBandwidthTest(runID int64, addr string, seconds int, ids []int)
 		}
 		// 多节点 × 数十秒可能跨过 access_token 有效期，每个节点重新取一次（必要时自动续期）
 		token = a.currentToken()
-		res := a.testNodeBandwidth(runID, token, user.UserToken, frpcBin, srv, n, i, len(sel), seconds)
+		res := a.testNodeBandwidth(runID, token, user.UserToken, frpcBin, srv, n, i, len(sel), seconds, parallel)
 		if a.speedCancelled(runID) {
 			cancelled = true
 			break
@@ -265,7 +266,7 @@ func (a *App) runBandwidthTest(runID int64, addr string, seconds int, ids []int)
 	}
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "speedDone", SpeedDone{
-			Addr: addr, UpAvg: upAvg, DownAvg: downAvg,
+			UpAvg: upAvg, DownAvg: downAvg,
 			UpPeak: upPeak, DownPeak: downPeak, Cancelled: cancelled,
 		})
 	}
@@ -279,7 +280,7 @@ func bwTunnelName(nodeID int) string {
 }
 
 // testNodeBandwidth 单节点：建隧道 → 起 frpc → 测延迟 → 打流 → 清理
-func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, srv *bwServer, node NodeBasic, idx, total, seconds int) SpeedNodeDone {
+func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, srv *bwServer, node NodeBasic, idx, total, seconds, parallel int) SpeedNodeDone {
 	res := SpeedNodeDone{ID: node.ID, Name: node.Name, Seconds: seconds}
 	proxyName := bwTunnelName(node.ID)
 
@@ -409,7 +410,7 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 	}
 
 	a.emitSpeedLog("info", fmt.Sprintf("#%d %s · 开始打流 %d 秒（下行/上行分时各半，前段预热不计入）→ %s", node.ID, node.Name, seconds, target))
-	dAvg, uAvg, dPeak, uPeak, cancelled, err := a.runThroughput(runID, node, idx, total, seconds, target)
+	dAvg, uAvg, dPeak, uPeak, cancelled, err := a.runThroughput(runID, node, idx, total, seconds, parallel, target)
 	if err != nil {
 		res.Error = err.Error()
 		return res
@@ -444,7 +445,8 @@ type phaseResult struct {
 //
 // 每段前 20%（至少 500ms）作为预热丢弃：TCP 慢启动 + frp 建链在这段时间还没到稳态，
 // 计入平均会把结果压得偏低。预热期间仍然上报瞬时速率，曲线不断档。
-func (a *App) runThroughput(runID int64, node NodeBasic, idx, total, seconds int, target string) (downAvg, upAvg, downPeak, upPeak float64, cancelled bool, err error) {
+func (a *App) runThroughput(runID int64, node NodeBasic, idx, total, seconds, parallel int, target string) (downAvg, upAvg, downPeak, upPeak float64, cancelled bool, err error) {
+	parallel = normalizeBWParallel(parallel)
 	// 总时长对半分给两个方向，保证用户设置的“单节点时长”不变
 	perDir := time.Duration(seconds) * time.Second / 2
 	if perDir < 2*time.Second {
@@ -455,11 +457,11 @@ func (a *App) runThroughput(runID int64, node NodeBasic, idx, total, seconds int
 		warmup = 500 * time.Millisecond
 	}
 
-	down, cancelled, err := a.runPhase(runID, node, idx, total, bwModeDown, seconds, perDir, warmup, 0, target)
+	down, cancelled, err := a.runPhase(runID, node, idx, total, bwModeDown, seconds, perDir, warmup, 0, parallel, target)
 	if err != nil || cancelled {
 		return 0, 0, 0, 0, cancelled, err
 	}
-	up, cancelled, err := a.runPhase(runID, node, idx, total, bwModeUp, seconds, perDir, warmup, 0.5, target)
+	up, cancelled, err := a.runPhase(runID, node, idx, total, bwModeUp, seconds, perDir, warmup, 0.5, parallel, target)
 	if err != nil || cancelled {
 		return 0, 0, 0, 0, cancelled, err
 	}
@@ -467,7 +469,7 @@ func (a *App) runThroughput(runID int64, node NodeBasic, idx, total, seconds int
 }
 
 // runPhase 跑单个方向的打流。fracBase 是该阶段在“单节点总时长”里的起点（下行 0、上行 0.5）。
-func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string, totalSeconds int, dur, warmup time.Duration, fracBase float64, target string) (phaseResult, bool, error) {
+func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string, totalSeconds int, dur, warmup time.Duration, fracBase float64, parallel int, target string) (phaseResult, bool, error) {
 	var res phaseResult
 	var bytes int64
 	stopCh := make(chan struct{})
@@ -494,7 +496,7 @@ func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string,
 	}
 
 	startWorkers := func(remaining time.Duration) {
-		for i := 0; i < bwParallel; i++ {
+		for i := 0; i < parallel; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

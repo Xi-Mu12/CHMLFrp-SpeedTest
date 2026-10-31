@@ -23,7 +23,7 @@ func TestBWServerThroughput(t *testing.T) {
 	target := fmt.Sprintf("127.0.0.1:%d", srv.Port())
 	a := &App{}
 	start := time.Now()
-	down, up, dPeak, uPeak, cancelled, err := a.runThroughput(0, NodeBasic{ID: 1, Name: "loopback"}, 0, 1, 2, target)
+	down, up, dPeak, uPeak, cancelled, err := a.runThroughput(0, NodeBasic{ID: 1, Name: "loopback"}, 0, 1, 2, 6, target)
 	if err != nil {
 		t.Fatalf("打流失败: %v", err)
 	}
