@@ -6,7 +6,22 @@ name: CI
 on:
   push:
     branches: [main, master]
+    # 纯文档/展示资源改动不值得跑一遍 vet+test，跳过以免浪费运行额度。
+    # 注意 build/ 和 wails.json 不能忽略：它们被 //go:embed 引用
+    # （build/windows/icon.ico、build/appicon.png、wails.json），改动可能直接编译失败。
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'assets/**'
+      - '.vscode/**'
+      - 'LICENSE'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'assets/**'
+      - '.vscode/**'
+      - 'LICENSE'
   workflow_dispatch:
 
 jobs:
