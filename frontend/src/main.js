@@ -1,5 +1,5 @@
 import './style.css';
-import { GetNodes, StartPrefer, CancelPrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, QuitApp, GetLocalIPs, GetMyIPInfo, QueryIPInfo, RequestClose, SetCloseAction, GetSettings, SaveSettings } from '../wailsjs/go/main/App';
+import { GetNodes, StartPrefer, CancelPrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, QuitApp, GetLocalIPs, GetMyIPInfo, QueryIPInfo, RequestClose, SetCloseAction, GetSettings, SaveSettings, AppendRunLog, ExportRunLog, GetRunLogPath } from '../wailsjs/go/main/App';
 import { EventsOn, WindowMinimise, WindowToggleMaximise, WindowGetPosition, WindowSetPosition, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { StartQZhuaLogin, LogoutQZhua, CancelQZhuaLogin, RestoreSession, SetRememberLogin } from '../wailsjs/go/main/App';
 
@@ -340,13 +340,16 @@ const updateLogCounts = () => {
     if ($('logWarnCount')) $('logWarnCount').textContent = String(warn);
 };
 
+// 当前筛选条件下的日志：渲染与导出共用同一份口径，避免两边不一致
+const filteredLogRows = () => runLogs.filter((x) =>
+    (logFilterSource === 'all' || x.source === logFilterSource)
+    && (!logQuery || x.msg.toLowerCase().includes(logQuery))
+);
+
 const renderLogs = () => {
     const list = $('logList');
     if (!list) return;
-    const rows = runLogs.filter((x) =>
-        (logFilterSource === 'all' || x.source === logFilterSource)
-        && (!logQuery || x.msg.toLowerCase().includes(logQuery))
-    );
+    const rows = filteredLogRows();
     if ($('logFilterCount')) $('logFilterCount').textContent = `${rows.length} 条`;
     if (!rows.length) {
         list.innerHTML = `<div class="log-empty"><b>暂无日志</b><small>${runLogs.length ? '当前筛选条件下没有匹配记录' : '执行延迟测速或带宽测速后，记录会显示在这里'}</small></div>`;
@@ -382,6 +385,12 @@ const appendLog = (source, level, msg) => {
     runLogs.push({ source, level, msg, time: logTime() });
     if (runLogs.length > 1000) runLogs.shift();
     scheduleLogRender();
+    // 同步落盘：内存日志重启即丢，用户反馈问题时基本没法排查
+    try {
+        AppendRunLog?.(source, level, msg)?.catch?.(() => {});
+    } catch {
+        /* 忽略：日志写盘失败不该影响测速 */
+    }
 };
 // 带宽测速的快捷写法
 const appendSpeedLog = (level, msg) => appendLog('bandwidth', level, msg);
@@ -401,6 +410,41 @@ $('logClearBtn')?.addEventListener('click', () => {
     runLogs.length = 0;
     updateLogCounts();
     renderLogs();
+});
+// 导出当前筛选结果：带上来源/条数/落盘目录，方便用户直接把文件发给作者
+$('logExportBtn')?.addEventListener('click', async () => {
+    const btn = $('logExportBtn');
+    const restore = () => { btn.innerHTML = '<span>↓</span>导出'; };
+    const rows = filteredLogRows();
+    if (!rows.length) {
+        btn.textContent = '无日志可导出';
+        setTimeout(restore, 1400);
+        return;
+    }
+    let dir = '';
+    try { dir = await GetRunLogPath(); } catch { dir = ''; }
+    const scope = logFilterSource === 'all' ? '全部' : logSourceLabel(logFilterSource);
+    const head = [
+        'CHMLFrp 测速 · 运行日志',
+        `导出时间：${new Date().toLocaleString('zh-CN')}`,
+        `筛选来源：${scope}${logQuery ? `，关键词「${logQuery}」` : ''}`,
+        `条数：${rows.length}`,
+        dir ? `落盘目录：${dir}` : '',
+    ].filter(Boolean).join('\r\n');
+    const body = rows
+        .map((x) => `${x.time} [${logSourceLabel(x.source)}][${logLevelTag(x.level)}] ${x.msg}`)
+        .join('\r\n');
+    try {
+        const path = await ExportRunLog(`${head}\r\n\r\n${body}\r\n`);
+        if (path) {
+            btn.textContent = '已导出';
+            setTimeout(restore, 1400);
+        }
+    } catch (err) {
+        btn.textContent = '导出失败';
+        setTimeout(restore, 1600);
+        appendLog('prefer', 'err', '导出日志失败：' + err);
+    }
 });
 let speedPaused = false;
 const speedSamples = [];
@@ -1134,7 +1178,8 @@ function renderLoginOnly() {
 }
 
 let nodesLoading = false;
-async function loadNodes() {
+// force=true 只在用户主动点「刷新」时传，用来跳过后端 5 分钟的节点缓存
+async function loadNodes(force = false) {
     // 未登录直接走引导分支，不发请求、不渲染卡片
     if (!qzhuaLoggedIn) {
         renderLoginOnly();
@@ -1147,7 +1192,7 @@ async function loadNodes() {
         $('bandwidthGroups').innerHTML = '<div class="empty-state"><span class="loader"></span><b>正在加载节点</b><small>请稍候</small></div>';
         $('preferStatus').textContent = '节点加载中…';
         try {
-            nodes = await GetNodes('all');
+            nodes = await GetNodes('all', force);
         } catch (err) {
             $('groups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${esc(err)}</small></div>`;
             $('bandwidthGroups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${esc(err)}</small></div>`;
@@ -1199,7 +1244,7 @@ $('refreshBtn').addEventListener('click', () => {
         return;
     }
     results.clear();
-    loadNodes();
+    loadNodes(true);
 });
 $('bandwidthRefreshBtn').addEventListener('click', () => {
     if (bandwidthRunning) return;
@@ -1207,7 +1252,7 @@ $('bandwidthRefreshBtn').addEventListener('click', () => {
         openLoginModal();
         return;
     }
-    loadNodes();
+    loadNodes(true);
 });
 $('bandwidthSelectAllBtn').addEventListener('click', () => {
     if (!nodes.length) return;

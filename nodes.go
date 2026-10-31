@@ -18,6 +18,49 @@ import (
 // ApiBase v2 统一调用地址
 const ApiBase = "https://cf-v2.uapis.cn"
 
+// apiHTTPClient 全局复用的 HTTP 客户端。
+// 早先每个请求各 new 一个 client，连接池随对象一起丢掉：/nodeinfo 要给 30 个
+// 节点各发一次请求，等于 30 次独立 TLS 握手，刷新周期被握手占掉大半。
+var apiHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     true,
+	},
+}
+
+// nodeCacheTTL 节点列表与节点 IP 的缓存有效期。
+// 节点是机房固定 IP，短期重复拉取没有意义；用户点「刷新」时可传 force 绕过。
+const nodeCacheTTL = 5 * time.Minute
+
+// nodeIPEntry 单个节点的 IP 缓存项，带各自的写入时间，
+// 避免不同批次的节点共用同一个全局时间戳导致误判过期。
+type nodeIPEntry struct {
+	ip string
+	at time.Time
+}
+
+var (
+	nodeCacheMu   sync.Mutex
+	nodeListCache []NodeBasic
+	nodeListAt    time.Time
+	nodeIPCache   = map[string]nodeIPEntry{}
+)
+
+// invalidateNodeCache 清空节点缓存，「刷新」按钮和登录态切换时调用。
+func invalidateNodeCache() {
+	nodeCacheMu.Lock()
+	nodeListCache = nil
+	nodeListAt = time.Time{}
+	nodeIPCache = map[string]nodeIPEntry{}
+	nodeCacheMu.Unlock()
+}
+
 // flexBool 兼容文档与实际返回不一致的情况：
 // 文档写 bool，实际 /node 返回的是 "true"/"false" 字符串。
 type flexBool bool
@@ -107,10 +150,23 @@ type userInfoResp struct {
 	Data  ChmlUser `json:"data"`
 }
 
-// FetchNodes 拉取全量节点列表（无需 Token）
+// FetchNodes 拉取全量节点列表（无需 Token），命中缓存时直接返回。
 func FetchNodes() ([]NodeBasic, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(ApiBase + "/node")
+	return fetchNodes(false)
+}
+
+// fetchNodes force=true 绕过缓存重新拉取。
+func fetchNodes(force bool) ([]NodeBasic, error) {
+	if !force {
+		nodeCacheMu.Lock()
+		if len(nodeListCache) > 0 && time.Since(nodeListAt) < nodeCacheTTL {
+			out := append([]NodeBasic(nil), nodeListCache...)
+			nodeCacheMu.Unlock()
+			return out, nil
+		}
+		nodeCacheMu.Unlock()
+	}
+	resp, err := apiHTTPClient.Get(ApiBase + "/node")
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +178,10 @@ func FetchNodes() ([]NodeBasic, error) {
 	if r.State != "success" {
 		return nil, fmt.Errorf("获取节点列表失败: %s", r.Msg)
 	}
+	nodeCacheMu.Lock()
+	nodeListCache = append([]NodeBasic(nil), r.Data...)
+	nodeListAt = time.Now()
+	nodeCacheMu.Unlock()
 	return r.Data, nil
 }
 
@@ -138,14 +198,13 @@ func FetchNodeInfo(nodeName, token string) (NodeInfo, error) {
 		return info, fmt.Errorf("未登录，无法获取节点 IP")
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, ApiBase+"/nodeinfo?node="+url.QueryEscape(nodeName), nil)
 	if err != nil {
 		return info, fmt.Errorf("创建节点信息请求失败: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
-	resp, err := client.Do(req)
+	resp, err := apiHTTPClient.Do(req)
 	if err != nil {
 		return info, fmt.Errorf("获取节点信息失败: %w", err)
 	}
@@ -173,15 +232,39 @@ func FetchNodeInfo(nodeName, token string) (NodeInfo, error) {
 }
 
 // FetchNodeIPs 并发获取节点 IP，单个节点失败不会阻断其它节点。
+// FetchNodeIPs 批量获取节点真实 IP，仍在有效期内的节点直接读缓存、不发请求。
 func FetchNodeIPs(nodes []NodeBasic, token string) map[string]string {
+	return fetchNodeIPs(nodes, token, false)
+}
+
+// fetchNodeIPs force=true 时忽略缓存全部重新请求。
+func fetchNodeIPs(nodes []NodeBasic, token string, force bool) map[string]string {
 	result := make(map[string]string)
 	if strings.TrimSpace(token) == "" || len(nodes) == 0 {
 		return result
 	}
+
+	// 先捞出仍然新鲜的缓存项，只对剩下的节点发请求
+	miss := make([]NodeBasic, 0, len(nodes))
+	nodeCacheMu.Lock()
+	for _, n := range nodes {
+		if !force {
+			if e, ok := nodeIPCache[n.Name]; ok && time.Since(e.at) < nodeCacheTTL {
+				result[n.Name] = e.ip
+				continue
+			}
+		}
+		miss = append(miss, n)
+	}
+	nodeCacheMu.Unlock()
+	if len(miss) == 0 {
+		return result
+	}
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
-	for _, node := range nodes {
+	for _, node := range miss {
 		node := node
 		wg.Add(1)
 		go func() {
@@ -198,6 +281,17 @@ func FetchNodeIPs(nodes []NodeBasic, token string) map[string]string {
 		}()
 	}
 	wg.Wait()
+
+	// 只把本轮真正请求到的节点写回缓存：缓存命中的项不能跟着续期，
+	// 否则反复进页面会让它们永不过期；请求失败的节点也不缓存，下次仍会重试。
+	nodeCacheMu.Lock()
+	now := time.Now()
+	for _, n := range miss {
+		if ip, ok := result[n.Name]; ok {
+			nodeIPCache[n.Name] = nodeIPEntry{ip: ip, at: now}
+		}
+	}
+	nodeCacheMu.Unlock()
 	return result
 }
 
@@ -211,14 +305,13 @@ func FetchUserInfo(token string) (ChmlUser, error) {
 		return user, fmt.Errorf("用户令牌为空")
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, ApiBase+"/userinfo", nil)
 	if err != nil {
 		return user, fmt.Errorf("创建用户信息请求失败: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
-	resp, err := client.Do(req)
+	resp, err := apiHTTPClient.Do(req)
 	if err != nil {
 		return user, fmt.Errorf("请求用户信息失败: %w", err)
 	}

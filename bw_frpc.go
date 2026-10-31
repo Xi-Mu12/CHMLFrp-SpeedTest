@@ -26,8 +26,9 @@ import (
 	"time"
 )
 
-// frpcInfoURL 官方 frpc 下载表（与官方启动器一致）
-const frpcInfoURL = "https://cf-v1.uapis.cn/download/frpc/frpc_info.json"
+// frpcInfoURL 官方 frpc 下载表（与官方启动器一致）。
+// 用 var 而不是 const，是为了让测试能把下载表指向本地 httptest 服务。
+var frpcInfoURL = "https://cf-v1.uapis.cn/download/frpc/frpc_info.json"
 
 type frpcAsset struct {
 	OS       string `json:"os"`
@@ -104,8 +105,52 @@ func frpcCacheDir() (string, error) {
 	return dir, nil
 }
 
+// frpcHashSuffix 缓存校验旁文件后缀：内容是下载时官方下载表给出的 sha256。
+// 有它在，就能在复用时确认缓存文件没被截断或写坏，而不只是看大小非零。
+const frpcHashSuffix = ".sha256"
+
+// fileSHA256 计算文件内容的 sha256（十六进制小写）
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// verifyCachedFrpc 校验缓存目录里的 frpc 是否可用。
+// 有旁文件时严格比对 sha256，不一致就删掉让上层重新下载；
+// 没有旁文件（早于该机制下载的旧缓存）退回"大小非零"判断，避免每次启动都白下 14MB。
+func verifyCachedFrpc(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() || st.Size() == 0 {
+		return false
+	}
+	raw, err := os.ReadFile(path + frpcHashSuffix)
+	if err != nil {
+		return true
+	}
+	want := strings.TrimSpace(string(raw))
+	if want == "" {
+		return true
+	}
+	got, err := fileSHA256(path)
+	if err != nil || !strings.EqualFold(got, want) {
+		_ = os.Remove(path)
+		_ = os.Remove(path + frpcHashSuffix)
+		return false
+	}
+	return true
+}
+
 // findLocalFrpc 依次检查：程序同目录 → 程序目录/resources → 缓存目录。
-// 用户如果已经自己放了 frpc（或从官方启动器复制过来），直接复用，不再下载。
+// 用户自己放的同目录 frpc 直接信任（不做哈希校验）；缓存目录里的文件必须过校验，
+// 否则视为损坏并删除，由 ensureFrpc 重新下载。
 func findLocalFrpc() (string, bool) {
 	name := frpcBinaryName()
 	var candidates []string
@@ -116,11 +161,14 @@ func findLocalFrpc() (string, bool) {
 			filepath.Join(dir, "resources", name),
 		)
 	}
-	if dir, err := frpcCacheDir(); err == nil {
-		candidates = append(candidates, filepath.Join(dir, name))
-	}
 	for _, p := range candidates {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Size() > 0 {
+			return p, true
+		}
+	}
+	if dir, err := frpcCacheDir(); err == nil {
+		p := filepath.Join(dir, name)
+		if verifyCachedFrpc(p) {
 			return p, true
 		}
 	}
@@ -183,26 +231,74 @@ func downloadFrpc(dest string, progress func(float64, string)) error {
 
 	report(0.05, fmt.Sprintf("下载 frpc（%.1f MB）…", float64(asset.Size)/1024/1024))
 	dlClient := &http.Client{Timeout: 10 * time.Minute}
-	dlResp, err := dlClient.Get(asset.Link)
+	tmp := dest + ".part"
+
+	// 断点续传：上一轮中断留下的 .part 从断点接着要，避免 14MB 每次从头再来
+	var offset int64
+	if st, err := os.Stat(tmp); err == nil && !st.IsDir() && st.Size() > 0 {
+		offset = st.Size()
+	}
+	dlReq, err := http.NewRequest(http.MethodGet, asset.Link, nil)
+	if err != nil {
+		return fmt.Errorf("创建 frpc 下载请求失败: %w", err)
+	}
+	if offset > 0 {
+		dlReq.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
+	dlResp, err := dlClient.Do(dlReq)
 	if err != nil {
 		return fmt.Errorf("下载 frpc 失败: %w", err)
 	}
 	defer dlResp.Body.Close()
-	if dlResp.StatusCode/100 != 2 {
-		return fmt.Errorf("下载 frpc 失败(HTTP %d)", dlResp.StatusCode)
+	switch dlResp.StatusCode {
+	case http.StatusPartialContent:
+		// 服务器接受续传，offset 保持不变
+	case http.StatusRequestedRangeNotSatisfiable:
+		// .part 已不小于完整文件，说明断点作废，丢掉重来
+		_ = os.Remove(tmp)
+		return fmt.Errorf("frpc 断点已失效，已重置，请重试")
+	case http.StatusOK:
+		offset = 0 // 服务器不支持 Range，退回整文件下载
+	default:
+		if dlResp.StatusCode/100 != 2 {
+			return fmt.Errorf("下载 frpc 失败(HTTP %d)", dlResp.StatusCode)
+		}
 	}
 
-	tmp := dest + ".download"
-	f, err := os.Create(tmp)
+	var f *os.File
+	if offset > 0 {
+		f, err = os.OpenFile(tmp, os.O_WRONLY|os.O_APPEND, 0o644)
+	} else {
+		f, err = os.Create(tmp)
+	}
 	if err != nil {
 		return fmt.Errorf("创建 frpc 临时文件失败: %w", err)
 	}
+
 	hasher := sha256.New()
+	if offset > 0 {
+		// 已落盘的部分也要计入校验，否则 sha256 只覆盖后半段
+		pf, perr := os.Open(tmp)
+		if perr != nil {
+			f.Close()
+			return fmt.Errorf("读取 frpc 断点文件失败: %w", perr)
+		}
+		_, cerr := io.Copy(hasher, pf)
+		pf.Close()
+		if cerr != nil {
+			f.Close()
+			return fmt.Errorf("读取 frpc 断点文件失败: %w", cerr)
+		}
+	}
+
 	total := asset.Size
 	if total <= 0 && dlResp.ContentLength > 0 {
-		total = dlResp.ContentLength
+		total = dlResp.ContentLength + offset
 	}
-	var written int64
+	written := offset
+	if offset > 0 {
+		report(0.06, fmt.Sprintf("续传 frpc（已有 %.1f MB）…", float64(offset)/1024/1024))
+	}
 	lastPct := -1
 	buf := make([]byte, 64*1024)
 	for {
@@ -210,7 +306,6 @@ func downloadFrpc(dest string, progress func(float64, string)) error {
 		if n > 0 {
 			if _, werr := f.Write(buf[:n]); werr != nil {
 				f.Close()
-				os.Remove(tmp)
 				return fmt.Errorf("写入 frpc 失败: %w", werr)
 			}
 			hasher.Write(buf[:n])
@@ -227,26 +322,33 @@ func downloadFrpc(dest string, progress func(float64, string)) error {
 			break
 		}
 		if rerr != nil {
+			// 保留 .part 供下次续传，不要在中断时删掉已下载的部分
 			f.Close()
-			os.Remove(tmp)
-			return fmt.Errorf("下载 frpc 中断: %w", rerr)
+			return fmt.Errorf("下载 frpc 中断: %w（已保留断点，重试会续传）", rerr)
 		}
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
 		return fmt.Errorf("写入 frpc 失败: %w", err)
 	}
 
-	if asset.Hash != "" && (asset.HashType == "" || strings.EqualFold(asset.HashType, "sha256")) {
-		sum := hex.EncodeToString(hasher.Sum(nil))
-		if !strings.EqualFold(sum, asset.Hash) {
-			os.Remove(tmp)
-			return fmt.Errorf("frpc 校验失败（sha256 不匹配）")
-		}
+	sum := hex.EncodeToString(hasher.Sum(nil))
+	hasHash := asset.Hash != "" && (asset.HashType == "" || strings.EqualFold(asset.HashType, "sha256"))
+	if hasHash && !strings.EqualFold(sum, asset.Hash) {
+		// 校验失败说明断点拼出来的内容不对，整份丢掉，不要在坏文件上继续续传
+		_ = os.Remove(tmp)
+		return fmt.Errorf("frpc 校验失败（sha256 不匹配），已删除损坏文件")
 	}
 	if err := os.Rename(tmp, dest); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("保存 frpc 失败: %w", err)
+	}
+	// 写旁文件供下次复用时校验；没有官方哈希就把残留的旧旁文件清掉
+	if hasHash {
+		if err := os.WriteFile(dest+frpcHashSuffix, []byte(strings.ToLower(strings.TrimSpace(asset.Hash))), 0o644); err != nil {
+			_ = os.Remove(dest + frpcHashSuffix)
+		}
+	} else {
+		_ = os.Remove(dest + frpcHashSuffix)
 	}
 	if runtime.GOOS != "windows" {
 		_ = os.Chmod(dest, 0o755)

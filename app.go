@@ -70,16 +70,18 @@ type NodeItem struct {
 	Fangyu bool   `json:"fangyu"`
 }
 
-// GetNodes 拉取节点列表并按权限组过滤（group: all/user/vip）
-func (a *App) GetNodes(group string) ([]NodeItem, error) {
-	nodes, err := FetchNodes()
+// GetNodes 拉取节点列表并按权限组过滤（group: all/user/vip）。
+// force=true 表示用户主动点「刷新」，跳过 5 分钟缓存重新拉；否则优先复用缓存，
+// 避免每次切到测速页都重新给 30 个节点各发一次 /nodeinfo。
+func (a *App) GetNodes(group string, force bool) ([]NodeItem, error) {
+	nodes, err := fetchNodes(force)
 	if err != nil {
 		return nil, err
 	}
 	filtered := FilterNodesByGroup(nodes, group)
 	// 走 currentToken：令牌快过期时会先静默续期，否则这里拿不到节点 IP 又没有任何提示
 	token := a.currentToken()
-	ipByName := FetchNodeIPs(filtered, token)
+	ipByName := fetchNodeIPs(filtered, token, force)
 	out := make([]NodeItem, 0, len(filtered))
 	for _, n := range filtered {
 		out = append(out, NodeItem{

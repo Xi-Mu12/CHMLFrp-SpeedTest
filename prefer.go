@@ -5,10 +5,7 @@
 package main
 
 import (
-	"bufio"
 	"net"
-	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,64 +70,6 @@ func pickPort(ip string, ports []int, timeout time.Duration) (int, bool) {
 	return 0, false
 }
 
-// preferIPListPath 用户手抄的 chmlfrp 服务器 IP 列表（桌面 txt）。
-// 解析规则见 parseChmlIPList。换机器/换路径时改这里即可。
-var preferIPListPath = defaultPreferIPList()
-
-func defaultPreferIPList() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return `C:\Users\Administrator\Desktop\chmlfrp服务器ip.txt`
-	}
-	return home + string(os.PathSeparator) + "Desktop" + string(os.PathSeparator) + "chmlfrp服务器ip.txt"
-}
-
-// rawIPEntry 从用户 txt 解析出的一行
-type rawIPEntry struct {
-	Name   string
-	IP     string
-	Domain string
-}
-
-// ipRegex 提取 IPv4。要求三段点分，避免误匹配节点名里的数字。
-var ipRegex = regexp.MustCompile(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`)
-
-// parseChmlIPList 解析手抄 IP 列表。
-// 每行形如 "节点名 IP 域名"，含"会员"/"免费"分组标记行与"节点名 IP 域名"表头。
-// 容错：当 IP 与域名粘连（如 "175.27.138.59n j.2.frp.one" 被空格误拆）时，
-// 用正则定位 IP，IP 之前的文本为节点名，IP 之后的所有非空字符拼回域名。
-func parseChmlIPList(path string) ([]rawIPEntry, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var out []rawIPEntry
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 64*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		// 跳过表头与分组标记行
-		low := strings.ToLower(line)
-		if strings.HasPrefix(line, "节点名") || low == "会员" || low == "免费" {
-			continue
-		}
-		loc := ipRegex.FindStringIndex(line)
-		if loc == nil {
-			continue // 没有合法 IP 的行直接跳过
-		}
-		ip := line[loc[0]:loc[1]]
-		name := strings.TrimSpace(line[:loc[0]])
-		// IP 之后的字符去掉所有空白拼回域名（修复 175.27.138.59n j.2.frp.one 这种错位）
-		domain := strings.Join(strings.Fields(line[loc[1]:]), "")
-		out = append(out, rawIPEntry{Name: name, IP: ip, Domain: domain})
-	}
-	return out, sc.Err()
-}
-
 // PreferEvent 延迟测速进度事件（前端契约，字段保持不变）
 type PreferEvent struct {
 	Kind   string  `json:"kind"`   // start / testing / node / finish / cancel
@@ -168,10 +107,17 @@ type preferTarget struct {
 func (a *App) StartPrefer(ids []int) {
 	runID := atomic.AddInt64(&a.preferRun, 1)
 	go func(id int64) {
-		// 1. 解析 txt 拿到 节点名 -> IP
-		// 节点列表先从公开接口获取；节点 IP 优先从官方 /nodeinfo 获取。
+		// 未登录时 /nodeinfo 一个节点 IP 也拿不到，先在入口拦下，
+		// 免得白拉一遍节点列表再给用户一句含糊的"测速已取消"。
+		token := a.currentToken()
+		if strings.TrimSpace(token) == "" {
+			if a.ctx != nil && atomic.LoadInt64(&a.preferRun) == id {
+				runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "needLogin"})
+			}
+			return
+		}
 
-		// 2. FetchNodes 拿节点列表（含 ID/China/Name，免 Token）
+		// 1. FetchNodes 拿节点列表（含 ID/China/Name，免 Token）
 		nodes, err := FetchNodes()
 		if err != nil {
 			if a.ctx != nil {
@@ -196,17 +142,8 @@ func (a *App) StartPrefer(ids []int) {
 		}
 
 		// 官方启动器使用带 Bearer access_token 的 /nodeinfo 获取真实 IP。
-		// 未登录或接口暂时不可用时，兼容旧版桌面 IP 列表文件。
 		// 走 currentToken：过期会自动续期，避免拿旧令牌把所有节点都测成“不可达”。
-		token := a.currentToken()
 		ipByName := FetchNodeIPs(sel, token)
-		if raws, fileErr := parseChmlIPList(preferIPListPath); fileErr == nil {
-			for _, r := range raws {
-				if _, exists := ipByName[r.Name]; !exists {
-					ipByName[r.Name] = r.IP
-				}
-			}
-		}
 
 		// 4. 关联 txt 的 IP，跳过 txt 没有的节点
 		var targets []preferTarget

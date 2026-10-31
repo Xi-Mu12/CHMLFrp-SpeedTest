@@ -95,7 +95,7 @@
         </section>
 
         <section id="view-logs" class="view">
-            <header class="compact-head"><div><h1>运行日志</h1><p>延迟测速与带宽测速的执行记录</p></div><div class="compact-stats"><span>共 <b id="logTotalCount">0</b></span><span>成功 <b id="logOkCount">0</b></span><span>失败 <b id="logErrCount">0</b></span><span>警告 <b id="logWarnCount">0</b></span></div><div class="toolbar"><button id="logClearBtn" class="tool-btn"><span>⌫</span>清空</button></div></header>
+            <header class="compact-head"><div><h1>运行日志</h1><p>延迟测速与带宽测速的执行记录</p></div><div class="compact-stats"><span>共 <b id="logTotalCount">0</b></span><span>成功 <b id="logOkCount">0</b></span><span>失败 <b id="logErrCount">0</b></span><span>警告 <b id="logWarnCount">0</b></span></div><div class="toolbar"><button id="logExportBtn" class="tool-btn"><span>↓</span>导出</button><button id="logClearBtn" class="tool-btn"><span>⌫</span>清空</button></div></header>
             <div class="filter-row"><span class="filter-caption">按来源筛选</span><button class="filter log-filter active" data-log-filter="all">全部</button><button class="filter log-filter" data-log-filter="prefer">延迟测速</button><button class="filter log-filter" data-log-filter="bandwidth">带宽测速</button><label class="node-search"><span>⌕</span><input id="logSearch" type="search" placeholder="搜索日志内容" autocomplete="off"></label><label class="log-autoscroll"><input id="logAutoScroll" type="checkbox" checked/> 自动滚动</label><span class="filter-count" id="logFilterCount">0 条</span></div>
             <div id="logList" class="log-list">
                 <div class="log-empty"><b>暂无日志</b><small>执行延迟测速或带宽测速后，记录会显示在这里</small></div>

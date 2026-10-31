@@ -335,6 +335,8 @@ func (a *App) completeQZhuaLogin(ctx context.Context, client *http.Client, confi
 // applyLogin 登录收尾：拉资料 → 落内存 → 持久化 → 通知前端。
 // OAuth 与静默恢复（RestoreSession）共用这段逻辑。
 func (a *App) applyLogin(ctx context.Context, client *http.Client, userinfoEndpoint string, token qzhuaToken) {
+	// 换了账号，上一轮缓存的节点列表/IP 不再可信（可见节点与权限可能不同）
+	invalidateNodeCache()
 	// 设备码流程的令牌只带 chmlfrp_api scope，OIDC userinfo 可能因缺少 openid
 	// 而拒绝访问。此时退化为只用 CHMLFrp 账户资料（官方启动器同样只取后者）。
 	user, userErr := fetchQZhuaUser(ctx, client, userinfoEndpoint, token.AccessToken)
@@ -441,6 +443,8 @@ func (a *App) LogoutQZhua() {
 	a.authExpiry = time.Time{}
 	a.chmlUser = nil
 	a.authMu.Unlock()
+	// 退出后节点 IP 属于旧账号的令牌，清掉缓存避免下次登录还拿到旧结果
+	invalidateNodeCache()
 	// 主动退出时连本地持久化一起清掉，否则下次启动会被静默恢复回来
 	removeSessionFile()
 	a.emitAuth(qzhuaAuthEvent{Status: "logged_out"})
