@@ -18,8 +18,16 @@ export function CleanupBandwidth() {
   return window['go']['main']['App']['CleanupBandwidth']();
 }
 
+export function GetAppInfo() {
+  return window['go']['main']['App']['GetAppInfo']();
+}
+
 export function GetAutostart() {
   return window['go']['main']['App']['GetAutostart']();
+}
+
+export function GetCloseAction() {
+  return window['go']['main']['App']['GetCloseAction']();
 }
 
 export function GetLocalIPs() {
@@ -38,16 +46,16 @@ export function GetSessionState() {
   return window['go']['main']['App']['GetSessionState']();
 }
 
+export function GetSettings() {
+  return window['go']['main']['App']['GetSettings']();
+}
+
 export function HideToTray() {
   return window['go']['main']['App']['HideToTray']();
 }
 
 export function LogoutQZhua() {
   return window['go']['main']['App']['LogoutQZhua']();
-}
-
-export function PausePrefer() {
-  return window['go']['main']['App']['PausePrefer']();
 }
 
 export function PauseSpeedTest() {
@@ -62,12 +70,12 @@ export function QuitApp() {
   return window['go']['main']['App']['QuitApp']();
 }
 
-export function RestoreSession() {
-  return window['go']['main']['App']['RestoreSession']();
+export function RequestClose() {
+  return window['go']['main']['App']['RequestClose']();
 }
 
-export function ResumePrefer() {
-  return window['go']['main']['App']['ResumePrefer']();
+export function RestoreSession() {
+  return window['go']['main']['App']['RestoreSession']();
 }
 
 export function ResumeSpeedTest() {
@@ -82,8 +90,16 @@ export function SaveImage(arg1) {
   return window['go']['main']['App']['SaveImage'](arg1);
 }
 
+export function SaveSettings(arg1) {
+  return window['go']['main']['App']['SaveSettings'](arg1);
+}
+
 export function SetAutostart(arg1) {
   return window['go']['main']['App']['SetAutostart'](arg1);
+}
+
+export function SetCloseAction(arg1) {
+  return window['go']['main']['App']['SetCloseAction'](arg1);
 }
 
 export function SetRememberLogin(arg1) {

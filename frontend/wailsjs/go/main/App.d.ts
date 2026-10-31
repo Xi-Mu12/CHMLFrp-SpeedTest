@@ -10,7 +10,11 @@ export function CancelSpeedTest():Promise<void>;
 
 export function CleanupBandwidth():Promise<void>;
 
+export function GetAppInfo():Promise<main.AppInfo>;
+
 export function GetAutostart():Promise<boolean>;
+
+export function GetCloseAction():Promise<string>;
 
 export function GetLocalIPs():Promise<Array<main.LocalIP>>;
 
@@ -20,11 +24,11 @@ export function GetNodes(arg1:string):Promise<Array<main.NodeItem>>;
 
 export function GetSessionState():Promise<main.SessionState>;
 
+export function GetSettings():Promise<main.AppSettings>;
+
 export function HideToTray():Promise<void>;
 
 export function LogoutQZhua():Promise<void>;
-
-export function PausePrefer():Promise<void>;
 
 export function PauseSpeedTest():Promise<void>;
 
@@ -32,9 +36,9 @@ export function QueryIPInfo(arg1:string):Promise<main.IPGeo>;
 
 export function QuitApp():Promise<void>;
 
-export function RestoreSession():Promise<main.SessionState>;
+export function RequestClose():Promise<void>;
 
-export function ResumePrefer():Promise<void>;
+export function RestoreSession():Promise<main.SessionState>;
 
 export function ResumeSpeedTest():Promise<void>;
 
@@ -42,7 +46,11 @@ export function SaveCSV(arg1:string):Promise<string>;
 
 export function SaveImage(arg1:string):Promise<string>;
 
+export function SaveSettings(arg1:main.AppSettings):Promise<main.AppSettings>;
+
 export function SetAutostart(arg1:boolean):Promise<void>;
+
+export function SetCloseAction(arg1:string):Promise<void>;
 
 export function SetRememberLogin(arg1:boolean):Promise<void>;
 
@@ -50,4 +58,4 @@ export function StartPrefer(arg1:Array<number>):Promise<void>;
 
 export function StartQZhuaLogin():Promise<main.QZhuaLoginStart>;
 
-export function StartSpeedTest(arg1:string,arg2:number,arg3:Array<number>):Promise<void>;
+export function StartSpeedTest(arg1:number,arg2:number,arg3:Array<number>):Promise<void>;
