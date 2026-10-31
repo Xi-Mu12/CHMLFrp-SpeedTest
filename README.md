@@ -161,7 +161,7 @@ IPWHO_LIVE=1 go test -tags desktop,production -run TestIPWhoLive -v .
 ├── frontend/                # 原生 HTML/CSS/JavaScript 前端
 ├── assets/                  # 应用展示资源（logo、界面截图）
 ├── build/                   # Wails 图标、平台配置与构建资源
-└── docs/                    # 隐私政策与服务条款
+└── docs/                    # GitHub Pages 站点根：首页、隐私政策与服务条款
 ```
 
 ## 外部服务
@@ -173,8 +173,9 @@ IPWHO_LIVE=1 go test -tags desktop,production -run TestIPWhoLive -v .
 
 ## 法律与隐私
 
-- [隐私政策](./docs/privacy.html)
-- [服务条款](./docs/terms.html)
+- [隐私政策](https://xi-mu12.github.io/CHMLFrp-SpeedTest/privacy.html)
+- [服务条款](https://xi-mu12.github.io/CHMLFrp-SpeedTest/terms.html)
+- [项目主页](https://xi-mu12.github.io/CHMLFrp-SpeedTest/)
 
 ## 许可证
 
