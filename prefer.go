@@ -23,12 +23,14 @@ import (
 const (
 	// preferPingTimes: 每节点 TCPing 次数。4 次兼顾统计与速度。
 	preferPingTimes = 4
-	// preferPingTimeout: 单次正式 TCPing 超时。2 秒覆盖国内/国外的正常建连。
-	preferPingTimeout = 2 * time.Second
+	// preferPingTimeout: 单次正式 TCPing 超时。3 秒覆盖国内/国外的正常建连。
+	// 2026-10-31 实测：美国洛杉矶节点 7000 端口 TCP 首连握手 2647ms（跨境丢包触发
+	// SYN 重传），2s 超时会把"慢但通"的节点误判为超时，故放宽到 3s。
+	preferPingTimeout = 3 * time.Second
 	// preferProbeTimeout: 端口探测超时，与正式测速一致。
 	// 探测是并行的，所以最坏耗时 = 一个 timeout，不会因候选端口多而线性叠加。
-	// 注意不能压太短：美国节点首连可能要 1~3s（TCP 重传），压到 800ms 会误杀。
-	preferProbeTimeout = 2 * time.Second
+	// 注意不能压太短：美国节点首连实测可达 ~2.6s（TCP SYN 重传），压到 2s 会误杀。
+	preferProbeTimeout = 3 * time.Second
 	// preferConcurrency: 最大并发。过大易打满本地端口/带宽，20 是经验值。
 	preferConcurrency = 20
 	// preferMaxLoss: 丢包率阈值。> 50% 直接淘汰。
@@ -141,7 +143,11 @@ type PreferEvent struct {
 	Sent   int     `json:"sent"`  // node 事件：TCPing 发送次数（建连尝试）
 	Recv   int     `json:"recv"`  // node 事件：TCPing 成功次数（收到 SYN-ACK）
 	Loss   float64 `json:"loss"`  // node 事件：丢包率 0~1
-	Result []struct {
+	// IcmpDelay 仅在 TCPing 失败时有意义：TCPing 全超时后降级发一次 ICMP，
+	// >=0 表示节点网络层在线（端口多半是被防火墙拦截），-1 表示连 ICMP 也不通
+	// （节点真离线或 ICMP 也被禁）。ICMP 通不代表能建隧道，不参与排名。
+	IcmpDelay float64 `json:"icmpDelay"`
+	Result    []struct {
 		ID    int     `json:"id"`
 		Name  string  `json:"name"`
 		Delay float64 `json:"delay"`
@@ -161,7 +167,6 @@ type preferTarget struct {
 // 流程：解析 txt 拿 IP → FetchNodes 拿 ID/China → 按名字关联 → 并发 TCPing → 排序 emit。
 func (a *App) StartPrefer(ids []int) {
 	runID := atomic.AddInt64(&a.preferRun, 1)
-	atomic.StoreInt32(&a.preferPaused, 0)
 	go func(id int64) {
 		// 1. 解析 txt 拿到 节点名 -> IP
 		// 节点列表先从公开接口获取；节点 IP 优先从官方 /nodeinfo 获取。
@@ -210,6 +215,26 @@ func (a *App) StartPrefer(ids []int) {
 			if !ok {
 				continue
 			}
+			// /nodeinfo 返回的可能不是 IP 而是域名（实测 sh-2.frp.one 等）。
+			// 预解析成 IP 字面量：后面 pickPort 3 个探测 + PingOne 4 次拨号全部
+			// 复用同一个地址，既省 7 次 DNS 往返，也避免多线节点解析结果中途漂移
+			// 导致探测和测速打到不同后端。
+			if net.ParseIP(ip) == nil {
+				if addrs, lerr := net.LookupHost(strings.TrimSpace(ip)); lerr == nil && len(addrs) > 0 {
+					pick := ""
+					for _, a := range addrs {
+						if net.ParseIP(a).To4() != nil {
+							pick = a
+							break
+						}
+					}
+					if pick == "" {
+						pick = addrs[0] // 只有 v6 时退而求其次
+					}
+					ip = pick
+				}
+				// 解析失败保留原值，交给 DialTimeout 自行解析兜底
+			}
 			targets = append(targets, preferTarget{ID: n.ID, Name: n.Name, China: n.China, IP: ip})
 		}
 		if len(targets) == 0 {
@@ -250,23 +275,14 @@ func (a *App) StartPrefer(ids []int) {
 				runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
 				return
 			}
-			// 暂停则阻塞至恢复或取消
-			if !a.waitPrefer(id, 0) {
-				runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{Kind: "cancel"})
-				return
-			}
 			wg.Add(1)
 			go func(idx int, t preferTarget) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				// 真正能刹住车的是这里。循环本体只做 wg.Add + go，
-				// 几十个 goroutine 几毫秒就全创建完了，循环里那处暂停检查
-				// 一个都拦不住——用户点暂停时它们早就在跑了。
-				// 所以拿到并发槽位后再确认一次暂停/取消。
-				if !a.waitPrefer(id, 0) {
-					return
-				}
+				// 真正能刹住车的是这里：循环本体只做 wg.Add + go，
+				// 几十个 goroutine 几毫秒就全创建完了，循环里的取消检查
+				// 拦不住已经在排队的任务，所以拿到并发槽位后再确认一次。
 				if atomic.LoadInt64(&a.preferRun) != id {
 					return
 				}
@@ -278,17 +294,40 @@ func (a *App) StartPrefer(ids []int) {
 				// 先选端口：各节点开放的端口不统一（7000/80/81），
 				// 取第一个能连上的来测。全不通说明该节点当前没有 frps 在服务。
 				port, ok := pickPort(t.IP, preferPorts, preferProbeTimeout)
+				// 瞬态丢包（跨境链路 SYN 被丢、云安全组限流）很常见，探测失败
+				// 不急着判死：歇一下重试一轮，第二次建连往往就通了。
+				if !ok && atomic.LoadInt64(&a.preferRun) == id {
+					time.Sleep(600 * time.Millisecond)
+					if atomic.LoadInt64(&a.preferRun) == id {
+						port, ok = pickPort(t.IP, preferPorts, preferProbeTimeout)
+					}
+				}
 				res := oneResult{id: t.ID, name: t.Name, port: port}
 				// TCPing 统计。端口全不通时按"发满次数、零响应、100% 丢包"上报，
 				// 与 PingOne 全部超时的返回保持一致，前端卡片显示才有意义。
 				sent, recv, loss := preferPingTimes, 0, 1.0
 				if ok {
 					pr := PingOne(t.Name, net.JoinHostPort(t.IP, strconv.Itoa(port)), preferPingTimes, preferPingTimeout)
+					// 4 次全超时也可能是瞬态丢包撞上首连，同样给一次重测机会。
+					if pr.Recv == 0 && atomic.LoadInt64(&a.preferRun) == id {
+						time.Sleep(600 * time.Millisecond)
+						if atomic.LoadInt64(&a.preferRun) == id {
+							pr = PingOne(t.Name, net.JoinHostPort(t.IP, strconv.Itoa(port)), preferPingTimes, preferPingTimeout)
+						}
+					}
 					sent, recv, loss = pr.Sent, pr.Recv, pr.LossRate
 					if pr.Recv > 0 {
 						res.ok = true
 						res.delay = float64(pr.AvgDelay.Microseconds()) / 1000.0
 						res.loss = pr.LossRate
+					}
+				}
+				// TCPing 全失败时降级发一次 ICMP：区分"节点离线"与"端口被防火墙
+				// 拦截但节点在线"（实测部分节点 ping 通、7000/80/81 全 DROP）。
+				icmpDelay := -1.0
+				if !res.ok && atomic.LoadInt64(&a.preferRun) == id {
+					if d, err := icmpPing(t.IP, preferProbeTimeout); err == nil {
+						icmpDelay = float64(d.Microseconds()) / 1000.0
 					}
 				}
 				// 测量期间可能已被取消或被新一轮取代，此时不能再 emit，
@@ -305,7 +344,7 @@ func (a *App) StartPrefer(ids []int) {
 				runtime.EventsEmit(a.ctx, "preferEvent", PreferEvent{
 					Kind: "node", NodeID: t.ID, Name: t.Name,
 					Index: done, Total: total, Delay: emitDelay, Port: res.port,
-					Sent: sent, Recv: recv, Loss: loss,
+					Sent: sent, Recv: recv, Loss: loss, IcmpDelay: icmpDelay,
 				})
 			}(i, t)
 		}
@@ -344,56 +383,4 @@ func (a *App) StartPrefer(ids []int) {
 // CancelPrefer 取消延迟测速
 func (a *App) CancelPrefer() {
 	atomic.AddInt64(&a.preferRun, 1)
-	atomic.StoreInt32(&a.preferPaused, 0)
-}
-
-// PausePrefer 暂停延迟测速
-func (a *App) PausePrefer() {
-	atomic.StoreInt32(&a.preferPaused, 1)
-}
-
-// ResumePrefer 恢复延迟测速
-func (a *App) ResumePrefer() {
-	atomic.StoreInt32(&a.preferPaused, 0)
-}
-
-// waitPrefer 阻塞 duration，期间响应暂停/取消。
-// duration<=0 时仅做一次暂停/取消检查（不等待）。
-// 返回 false 表示已被取消。
-func (a *App) waitPrefer(id int64, duration time.Duration) bool {
-	if duration <= 0 {
-		for atomic.LoadInt32(&a.preferPaused) == 1 {
-			if atomic.LoadInt64(&a.preferRun) != id {
-				return false
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		return atomic.LoadInt64(&a.preferRun) == id
-	}
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	start := time.Now()
-	pausedAt := time.Time{}
-	pausedTotal := time.Duration(0)
-	wasPaused := false
-	for now := range ticker.C {
-		if atomic.LoadInt64(&a.preferRun) != id {
-			return false
-		}
-		if atomic.LoadInt32(&a.preferPaused) == 1 {
-			if !wasPaused {
-				pausedAt = now
-				wasPaused = true
-			}
-			continue
-		}
-		if wasPaused {
-			pausedTotal += now.Sub(pausedAt)
-			wasPaused = false
-		}
-		if now.Sub(start)-pausedTotal >= duration {
-			return true
-		}
-	}
-	return false
 }
