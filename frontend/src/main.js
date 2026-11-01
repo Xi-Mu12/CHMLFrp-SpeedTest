@@ -1944,7 +1944,7 @@ function renderIPGeo(geo, self) {
             <div class="ip-geo-sub"><span class="ip-geo-place">${esc(place)}</span><span class="ip-geo-kind">IPv${geo.version || 4}${self ? ' · 当前出口' : ' · 指定查询'}</span></div>
         </div>
         <div class="ip-geo-grid">${cells.map(([k, v, extra]) => `<div><span>${k}</span><b>${esc(v)}</b>${extra ? `<em>${esc(extra)}</em>` : ''}</div>`).join('')}</div>
-        <p class="ip-geo-note">数据来源 ipwho.is · 免密钥 · 1000 次/天 · 中文结果</p>`;
+        <p class="ip-geo-note">数据来源 ipwho.is · 优先 IPv6 · 免密钥 · 1000 次/天 · 中文结果</p>`;
     // 旗帜是远程 SVG，加载失败就摘掉，避免显示破图空框
     card.querySelectorAll('.ip-flag').forEach((img) => {
         img.addEventListener('error', () => { img.remove(); });

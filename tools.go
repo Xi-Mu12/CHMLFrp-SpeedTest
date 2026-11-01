@@ -185,6 +185,31 @@ type ipWhoResp struct {
 // lang=zh-CN 让国家/省市/首都/大洲返回中文。
 const ipWhoEndpoint = "https://ipwho.is/"
 
+// preferIPv6DialContext 让 ipwho.is 优先走 IPv6，失败再回落到 IPv4。
+//
+// Windows 上 Go 默认可能先拨 IPv4，而浏览器通常会优先 IPv6；双栈网络下
+// 这两个出口可能是完全不同的地址（例如 IPv4 在北京、IPv6 在广西），
+// 地理库返回的省市自然也会不同。这里显式对齐浏览器的优先顺序。
+func preferIPv6DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 4 * time.Second}
+	if conn, err := dialer.DialContext(ctx, "tcp6", addr); err == nil {
+		return conn, nil
+	}
+	return dialer.DialContext(ctx, "tcp4", addr)
+}
+
+// ipWhoHTTPClient 复用连接；ProxyFromEnvironment 保持和原来一致。
+var ipWhoHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           preferIPv6DialContext,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+	},
+}
+
 // ipWhoFailMsg 把接口的英文失败原因翻成中文。
 func ipWhoFailMsg(msg string) string {
 	switch strings.ToLower(strings.TrimSpace(msg)) {
@@ -213,8 +238,7 @@ func (a *App) fetchIPGeo(path string) (IPGeo, error) {
 		return IPGeo{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := ipWhoHTTPClient.Do(req)
 	if err != nil {
 		return IPGeo{}, fmt.Errorf("请求 ipwho.is 失败：%v", err)
 	}
