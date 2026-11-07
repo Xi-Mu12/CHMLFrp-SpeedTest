@@ -121,7 +121,29 @@ IPWHO_LIVE=1 go test -tags desktop,production -run TestIPWhoLive -v .
 ### CI
 
 - `.github/workflows/ci.yml`：push 到 `main`/`master` 或提 PR 时自动跑 `go vet` 与 `go test`（windows-latest）。
-- `.github/workflows/release.yml`：**手动触发**的三端打包。进入 **Actions → Build → Run workflow** 产出 Windows / Linux / macOS 产物；提交代码不会自动打包。
+- `.github/workflows/release.yml`：**手动触发**时三端打包；推送 `v*` tag 时额外发布到 GitHub Release（自动更新的数据源）。
+
+## 自动更新与发布
+
+Windows 版本内置自动更新：启动后静默检查 GitHub Releases，发现新版本时展示更新公告，确认后后台流式下载、校验 SHA256、解压，再由独立的 `updater.exe` 在主程序退出后替换文件并重启。
+
+- 检查源：`https://api.github.com/repos/Xi-Mu12/CHMLFrp-SpeedTest/releases/latest`（公开仓库，匿名访问，客户端不含任何 Token）。
+- 安装包命名固定：`CHMLFrp-SpeedTest-windows-amd64.zip`，内含 `CHMLFrp-SpeedTest.exe` 与 `updater.exe`。
+- 校验：使用 Release Asset 的 `digest`（`sha256:` 格式）；摘要缺失直接拒绝安装。
+- 安装：先备份旧文件，替换失败自动回滚；ZIP 解压拒绝路径穿越与符号链接。
+- 跳过版本、自动检查开关、最近检查时间保存在 `settings.json`，自动检查每 12 小时最多一次。
+- 非 Windows 平台暂不支持自动安装，界面会退化为"前往下载"。
+
+发布新版本：
+
+```bash
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+CI 会用 tag 注入 `-X main.version=v1.2.0` 并构建 `updater.exe`。**Release 的说明（body）就是客户端展示的更新公告**，建议按「新增 / 优化 / 修复」分段书写。
+
+> 注意：GitHub 在部分网络环境下直连不稳定。客户端会遵循系统代理设置（`HTTP(S)_PROXY`）；若目标用户普遍无代理，后续可考虑自有镜像或 CDN 转发，但下载源仍需固定，不能让客户端接受任意 URL。
 
 ## 项目结构
 
