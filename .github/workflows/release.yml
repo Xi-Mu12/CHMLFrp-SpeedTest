@@ -1,10 +1,16 @@
 name: Build
 
-# 手动构建：在 Actions 页点 Run workflow 时，三端（Windows / Linux / macOS）原生
-# 编译 CHMLFrp-SpeedTest 并打包，产物作为 artifact 上传供下载。
-# 提交代码不会自动构建；需要时手动跑。
+# 构建与发布：
+#  - 手动触发：三端（Windows / Linux / macOS）原生编译，产物作为 artifact 上传；
+#  - 推送 v* tag：同上，并额外把安装包发布到 GitHub Release（自动更新读取这里）。
+#
+# 自动更新只支持 Windows：Release 中的 Windows 包必须同时包含主程序与 updater.exe，
+# 命名固定为 CHMLFrp-SpeedTest-windows-amd64.zip，客户端按 GOOS/GOARCH 匹配。
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build:
@@ -19,7 +25,7 @@ jobs:
             artifact: CHMLFrp-SpeedTest-windows-amd64
           - os: macos
             runs-on: macos-latest
-            artifact: CHMLFrp-SpeedTest-macos
+            artifact: CHMLFrp-SpeedTest-darwin-arm64
           - os: linux
             runs-on: ubuntu-22.04
             artifact: CHMLFrp-SpeedTest-linux-amd64
@@ -56,6 +62,7 @@ jobs:
             librsvg2-dev \
             libgl1-mesa-dev \
             libx11-dev \
+            zip \
             pkg-config \
             build-essential
 
@@ -64,33 +71,93 @@ jobs:
         if: matrix.os == 'windows'
         run: choco install nsis -y --no-progress
 
+      # 版本号单一来源：tag 直接用 tag，手动构建记为 dev。
+      # 通过 -X main.version 注入，覆盖 wails.json 里的 productVersion。
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          if [[ "$ref" == v* ]]; then
+            echo "value=$ref" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build
-        run: wails build -clean
+        shell: bash
+        run: wails build -clean -ldflags "-X main.version=${{ steps.version.outputs.value }}"
+
+      # 更新辅助程序必须单独编译，随主程序一起放进 ZIP。
+      - name: Build updater (Windows)
+        if: matrix.os == 'windows'
+        shell: bash
+        run: go build -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/updater.exe ./cmd/updater
+
+      - name: Build updater (Unix)
+        if: matrix.os != 'windows'
+        shell: bash
+        run: go build -trimpath -ldflags "-s -w" -o build/bin/updater ./cmd/updater
 
       - name: Package (Windows)
         if: matrix.os == 'windows'
-        shell: bash
+        shell: pwsh
         run: |
-          mkdir -p dist
-          cp build/bin/CHMLFrp-SpeedTest.exe dist/CHMLFrp-SpeedTest-windows-amd64.exe
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build/bin/CHMLFrp-SpeedTest.exe dist/
+          Copy-Item build/bin/updater.exe dist/
+          Compress-Archive -Path dist/*.exe -DestinationPath dist/CHMLFrp-SpeedTest-windows-amd64.zip
+          Remove-Item dist/CHMLFrp-SpeedTest.exe, dist/updater.exe
 
       - name: Package (Linux)
         if: matrix.os == 'linux'
         run: |
           mkdir -p dist
-          tar -czf dist/CHMLFrp-SpeedTest-linux-amd64.tar.gz -C build/bin CHMLFrp-SpeedTest
+          cp build/bin/CHMLFrp-SpeedTest dist/
+          cp build/bin/updater dist/
+          cd dist
+          zip CHMLFrp-SpeedTest-linux-amd64.zip CHMLFrp-SpeedTest updater
+          rm CHMLFrp-SpeedTest updater
 
       - name: Package (macOS)
         if: matrix.os == 'macos'
         run: |
           mkdir -p dist
-          cd build/bin && zip -ry ../../dist/CHMLFrp-SpeedTest-macos-arm64.zip CHMLFrp-SpeedTest.app
+          cd build/bin && zip -ry ../../dist/CHMLFrp-SpeedTest-darwin-arm64.zip CHMLFrp-SpeedTest.app
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/*
+          path: dist/*.zip
           if-no-files-found: error
 
-      # 如需自动发布到 GitHub Release，再加 push.tags 触发与 Publish 步骤即可。
+  # 只有 tag 触发的构建才发布；手动构建只产出 artifact，不影响线上版本。
+  release:
+    name: Publish Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect packages
+        run: |
+          mkdir -p dist
+          find artifacts -name '*.zip' -exec cp {} dist/ \;
+          ls -lh dist
+
+      # Release 的 body 就是客户端的更新公告，提交时请按
+      # 「新增 / 优化 / 修复」分段书写 tag 的发布说明。
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
