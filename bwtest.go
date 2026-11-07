@@ -25,7 +25,6 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,6 +84,26 @@ func (a *App) emitNodeProgress(node NodeBasic, p float64) {
 	runtime.EventsEmit(a.ctx, "speedNodeProgress", SpeedNodeProgressEvent{
 		ID: node.ID, Name: node.Name, Progress: p,
 	})
+	a.bwMu.Lock()
+	if _, ok := a.bwProgress[node.ID]; ok {
+		a.bwProgress[node.ID] = math.Max(a.bwProgress[node.ID], p)
+	}
+	a.emitRunProgressLocked()
+	a.bwMu.Unlock()
+}
+
+func (a *App) emitRunProgressLocked() {
+	if a.ctx == nil || len(a.bwProgress) == 0 {
+		return
+	}
+	var sum float64
+	for _, p := range a.bwProgress {
+		sum += p
+	}
+	runtime.EventsEmit(a.ctx, "speedRunProgress", map[string]interface{}{
+		"progress": sum / float64(len(a.bwProgress)), "active": a.bwActive,
+		"completed": a.bwCompleted, "total": len(a.bwProgress),
+	})
 }
 
 func (a *App) speedCancelled(runID int64) bool {
@@ -96,18 +115,24 @@ func (a *App) speedCancelled(runID int64) bool {
 func (a *App) StartSpeedTest(seconds, parallel int, ids []int) {
 	seconds = normalizeTestSeconds(seconds)
 	parallel = normalizeBWParallel(parallel)
-	// 防重入：连点“开始测试”会让两轮同时建隧道、起 frpc，而 bwProc/bwTunnelID
-	// 只有单槽，后一轮会覆盖前一轮 → 旧的 frpc 杀不掉、临时隧道残留吃账号配额。
+	// Keep admission and shutdown coordinated until the run has a completion channel.
+	a.bwMu.Lock()
+	if a.quitting.Load() {
+		a.bwMu.Unlock()
+		return
+	}
 	if !atomic.CompareAndSwapInt32(&a.bwBusy, 0, 1) {
+		a.bwMu.Unlock()
 		a.emitSpeedLog("warn", "已有带宽测速任务在运行，请先停止或等它结束后再开始")
-		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "speedDone", SpeedDone{Cancelled: true})
-		}
 		return
 	}
 	runID := atomic.AddInt64(&a.speedRun, 1)
+	a.bwFinished = make(chan struct{})
+	finished := a.bwFinished
+	a.bwMu.Unlock()
 	atomic.StoreInt32(&a.speedPaused, 0)
 	go func() {
+		defer close(finished)
 		defer atomic.StoreInt32(&a.bwBusy, 0)
 		a.runBandwidthTest(runID, seconds, parallel, ids)
 	}()
@@ -155,7 +180,7 @@ func (a *App) runBandwidthTest(runID int64, seconds, parallel int, ids []int) {
 		fail("账号信息缺少用户令牌（usertoken），无法启动 frpc")
 		return
 	}
-	a.emitSpeedLog("ok", fmt.Sprintf("已登录：%s · 隧道配额 %d/%d", user.Username, user.Tunnel, user.TunnelCount))
+	a.emitSpeedLog("ok", fmt.Sprintf("已登录：%s", user.Username))
 
 	allNodes, err := FetchNodes()
 	if err != nil {
@@ -176,17 +201,14 @@ func (a *App) runBandwidthTest(runID int64, seconds, parallel int, ids []int) {
 		fail("没有可测节点")
 		return
 	}
+	workers := bandwidthWorkers(a.GetSettings().BWTunnelConcurrency, len(sel))
+	a.emitSpeedLog("info", fmt.Sprintf("本轮最多同时测试 %d 条隧道，创建结果以服务端返回为准", workers))
 	a.emitSpeedLog("info", fmt.Sprintf("待测节点 %d 个，单节点 %d 秒，单方向 %d 条连接（每节点含建隧道/起 frpc 约 5~10 秒）", len(sel), seconds, parallel))
 
 	a.emitSpeedLog("info", "检查 frpc 客户端…")
-	frpcBin, err := ensureFrpc(func(pct float64, msg string) {
-		a.emitSpeedLog("info", msg)
-		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "speedDownload", map[string]float64{"progress": pct})
-		}
-	})
-	if err != nil {
-		fail("准备 frpc 失败：" + err.Error())
+	frpcBin, ready := findLocalFrpc()
+	if !ready {
+		fail("尚未下载 frpc，请确认下载测速组件后再开始测速")
 		return
 	}
 	a.emitSpeedLog("ok", "frpc 就绪："+frpcBin)
@@ -199,42 +221,61 @@ func (a *App) runBandwidthTest(runID int64, seconds, parallel int, ids []int) {
 	defer srv.Close()
 
 	done := make([]SpeedNodeDone, 0, len(sel))
-	cancelled := false
-	for i, n := range sel {
-		if a.speedCancelled(runID) {
-			cancelled = true
-			break
-		}
-		// 多节点 × 数十秒可能跨过 access_token 有效期，每个节点重新取一次（必要时自动续期）
-		token = a.currentToken()
-		res := a.testNodeBandwidth(runID, token, user.UserToken, frpcBin, srv, n, i, len(sel), seconds, parallel)
-		if a.speedCancelled(runID) {
-			cancelled = true
-			break
-		}
-		done = append(done, res)
-		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "speedNodeDone", res)
-		}
-		if res.Error != "" {
-			a.emitSpeedLog("err", fmt.Sprintf("#%d %s 失败：%s", res.ID, res.Name, res.Error))
-			// 失败节点不会有自然 tick，补一帧把进度条推到节点边界
-			if a.ctx != nil {
-				runtime.EventsEmit(a.ctx, "speed", SpeedTick{
-					Progress:  float64(i+1) / float64(len(sel)),
-					Elapsed:   float64(i+1) * float64(seconds),
-					Total:     float64(len(sel)) * float64(seconds),
-					NodeID:    n.ID,
-					NodeName:  n.Name,
-					NodeIndex: i + 1,
-					NodeCount: len(sel),
-					Phase:     "prepare",
-				})
-			}
-		} else {
-			a.emitSpeedLog("ok", fmt.Sprintf("#%d %s 完成：↓%.1f / ↑%.1f Mbps", res.ID, res.Name, res.DownAvg, res.UpAvg))
-		}
+	a.bwMu.Lock()
+	a.bwProgress = make(map[int]float64, len(sel))
+	for _, node := range sel {
+		a.bwProgress[node.ID] = 0
 	}
+	a.bwActive, a.bwCompleted = 0, 0
+	a.emitRunProgressLocked()
+	a.bwMu.Unlock()
+	var resultMu sync.Mutex
+	var wg sync.WaitGroup
+	jobs := make(chan int)
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				for atomic.LoadInt32(&a.speedPaused) == 1 && !a.speedCancelled(runID) {
+					time.Sleep(bwTickInterval)
+				}
+				if a.speedCancelled(runID) {
+					continue
+				}
+				taskToken := a.currentToken()
+				a.bwMu.Lock()
+				a.bwActive++
+				a.emitRunProgressLocked()
+				a.bwMu.Unlock()
+				res := a.testNodeBandwidth(runID, taskToken, user.UserToken, frpcBin, srv, sel[i], i, len(sel), seconds, parallel)
+				resultMu.Lock()
+				done = append(done, res)
+				resultMu.Unlock()
+				a.bwMu.Lock()
+				a.bwActive--
+				a.bwCompleted++
+				a.bwProgress[sel[i].ID] = 1
+				a.emitRunProgressLocked()
+				a.bwMu.Unlock()
+				if a.ctx != nil {
+					runtime.EventsEmit(a.ctx, "speedNodeDone", res)
+				}
+				if res.Error != "" {
+					a.emitSpeedLog("err", fmt.Sprintf("#%d %s 失败：%s", res.ID, res.Name, res.Error))
+				}
+			}
+		}()
+	}
+	for i := range sel {
+		if a.speedCancelled(runID) {
+			break
+		}
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	cancelled := a.speedCancelled(runID)
 
 	var downSum, upSum, downPeak, upPeak float64
 	ok := 0
@@ -272,6 +313,13 @@ func (a *App) runBandwidthTest(runID int64, seconds, parallel int, ids []int) {
 	}
 }
 
+func bandwidthWorkers(desired, selected int) int {
+	if selected <= 0 {
+		return 0
+	}
+	return min(normalizeTunnelConcurrency(desired), selected)
+}
+
 // bwTunnelName 生成符合 CHMLFrp 规范的隧道名：
 // 只允许数字、字母、下划线（之前用连字符会被服务端拒绝：“隧道名不符合规范”）。
 // 形如 bw_123_456789012，长度可控（<=20 字符）。
@@ -294,16 +342,23 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "speedNodeProgress", SpeedNodeProgressEvent{ID: node.ID, Name: node.Name, Progress: 1})
 		}
-		if tracked {
-			a.clearBWResource()
-		}
 		// 无论成功失败，都不留临时隧道
 		if tun != nil {
-			a.deleteTunnelWithRetry(token, tun.ID)
+			if !a.deleteTunnelWithRetry(token, tun.ID) {
+				// A leaked tunnel still occupies quota: stop admitting more work.
+				if !a.speedCancelled(runID) {
+					atomic.CompareAndSwapInt64(&a.speedRun, runID, runID+1)
+				}
+			}
 		} else if created {
 			if t := findTunnelByName(token, proxyName); t != nil {
-				a.deleteTunnelWithRetry(token, t.ID)
+				if !a.deleteTunnelWithRetry(token, t.ID) {
+					atomic.CompareAndSwapInt64(&a.speedRun, runID, runID+1)
+				}
 			}
+		}
+		if tracked {
+			a.clearBWResource(tun.ID)
 		}
 	}()
 
@@ -328,6 +383,7 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 		msg := err.Error()
 		if isFatalTunnelErr(msg) {
 			res.Error = "创建隧道被拒绝：" + msg
+			atomic.CompareAndSwapInt64(&a.speedRun, runID, runID+1)
 			return res
 		}
 		a.emitSpeedLog("warn", fmt.Sprintf("#%d %s 建隧道失败（第 %d 次，端口 %d）：%s", node.ID, node.Name, attempt, remotePort, msg))
@@ -339,13 +395,20 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	tun, err := waitTunnelByName(token, proxyName, bwTunnelWait, func() bool { return a.speedCancelled(runID) })
+	var err error
+	tun, err = waitTunnelByName(token, proxyName, bwTunnelWait, func() bool { return a.speedCancelled(runID) })
 	if err != nil {
 		res.Error = err.Error()
 		return res
 	}
 	if tun.Dorp == "" {
 		res.Error = "隧道未分配远程端口"
+		return res
+	}
+	a.trackBWResource(nil, tun.ID, token)
+	tracked = true
+	if a.speedCancelled(runID) {
+		res.Error = "已取消"
 		return res
 	}
 	if strings.TrimSpace(tun.IP) == "" {
@@ -368,7 +431,13 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 	a.emitNodeProgress(node, 0.12)
 
 	// frpc 配置与进程
-	iniPath := filepath.Join(os.TempDir(), fmt.Sprintf("chmlfrp-bw-%d.ini", node.ID))
+	ini, err := os.CreateTemp("", "chmlfrp-bw-*.ini")
+	if err != nil {
+		res.Error = "创建 frpc 配置失败：" + err.Error()
+		return res
+	}
+	iniPath := ini.Name()
+	ini.Close()
 	defer os.Remove(iniPath)
 	nodeToken := strings.TrimSpace(tun.NodeToken)
 	if nodeToken == "" {
@@ -379,8 +448,13 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 		return res
 	}
 	a.emitSpeedLog("info", fmt.Sprintf("#%d %s · 启动 frpc → %s:%d", node.ID, node.Name, serverAddr, serverPort))
+	if a.speedCancelled(runID) {
+		res.Error = "已取消"
+		return res
+	}
 	proc, err := startFrpcProc(frpcBin, iniPath)
 	if err != nil {
+		a.reportFrpcFailure(frpcBin, "启动 frpc", err)
 		res.Error = err.Error()
 		return res
 	}
@@ -611,9 +685,9 @@ func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string,
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "speed", SpeedTick{
 				Up: upRate, Down: downRate,
-				Progress: (float64(idx) + nodeFrac) / float64(total),
-				Elapsed:  (float64(idx) + nodeFrac) * float64(totalSeconds),
-				Total:    float64(total) * float64(totalSeconds),
+				Progress: nodeFrac,
+				Elapsed:  nodeFrac * float64(totalSeconds),
+				Total:    float64(totalSeconds),
 				NodeID:   node.ID, NodeName: node.Name,
 				NodeIndex: idx + 1, NodeCount: total, Phase: mode,
 			})
@@ -641,14 +715,15 @@ func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string,
 }
 
 // deleteTunnelWithRetry 删除临时隧道，失败重试几次（frpc 刚杀，服务端状态可能滞后）
-func (a *App) deleteTunnelWithRetry(token string, id int) {
+func (a *App) deleteTunnelWithRetry(token string, id int) bool {
 	for i := 0; i < 3; i++ {
 		if err := DeleteTunnelAPI(token, id); err == nil {
-			return
+			return true
 		}
 		time.Sleep(700 * time.Millisecond)
 	}
 	a.emitSpeedLog("warn", fmt.Sprintf("临时隧道 #%d 删除失败，请到面板手动删除", id))
+	return false
 }
 
 // ---------- 退出时的兜底清理：避免残留 frpc 进程/临时隧道 ----------
@@ -656,34 +731,40 @@ func (a *App) deleteTunnelWithRetry(token string, id int) {
 func (a *App) trackBWResource(proc *frpcProc, tunnelID int, token string) {
 	a.bwMu.Lock()
 	defer a.bwMu.Unlock()
-	a.bwProc = proc
-	a.bwTunnelID = tunnelID
-	a.bwToken = token
+	if a.bwResources == nil {
+		a.bwResources = make(map[int]bwResource)
+	}
+	a.bwResources[tunnelID] = bwResource{proc, tunnelID, token}
 }
 
-func (a *App) clearBWResource() {
+func (a *App) clearBWResource(id int) {
 	a.bwMu.Lock()
 	defer a.bwMu.Unlock()
-	a.bwProc = nil
-	a.bwTunnelID = 0
-	a.bwToken = ""
+	delete(a.bwResources, id)
+}
+
+type bwResource struct {
+	proc     *frpcProc
+	tunnelID int
+	token    string
 }
 
 // CleanupBandwidth 供退出流程调用：杀 frpc + 删除临时隧道
 func (a *App) CleanupBandwidth() {
 	a.bwMu.Lock()
-	proc := a.bwProc
-	tunnelID := a.bwTunnelID
-	token := a.bwToken
-	a.bwProc = nil
-	a.bwTunnelID = 0
-	a.bwToken = ""
-	a.bwMu.Unlock()
-
-	if proc != nil {
-		proc.Stop()
+	atomic.AddInt64(&a.speedRun, 1)
+	resources := make([]bwResource, 0, len(a.bwResources))
+	for _, resource := range a.bwResources {
+		resources = append(resources, resource)
 	}
-	if tunnelID > 0 && token != "" {
-		_ = DeleteTunnelAPI(token, tunnelID)
+	finished := a.bwFinished
+	a.bwMu.Unlock()
+	for _, resource := range resources {
+		if resource.proc != nil {
+			resource.proc.Stop()
+		}
+	}
+	if finished != nil {
+		<-finished
 	}
 }

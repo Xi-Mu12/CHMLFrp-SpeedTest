@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,7 +24,11 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
+
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // frpcInfoURL 官方 frpc 下载表（与官方启动器一致）。
@@ -108,6 +113,97 @@ func frpcCacheDir() (string, error) {
 // frpcHashSuffix 缓存校验旁文件后缀：内容是下载时官方下载表给出的 sha256。
 // 有它在，就能在复用时确认缓存文件没被截断或写坏，而不只是看大小非零。
 const frpcHashSuffix = ".sha256"
+
+func frpcSecurityError(err error) bool {
+	return errors.Is(err, syscall.Errno(225)) || errors.Is(err, syscall.Errno(226)) ||
+		errors.Is(err, syscall.Errno(577)) || errors.Is(err, syscall.Errno(1260))
+}
+
+func (a *App) reportFrpcFailure(path, stage string, err error) {
+	if runtime.GOOS != "windows" || err == nil || a.ctx == nil {
+		return
+	}
+	blocked := frpcSecurityError(err)
+	if !blocked && !errors.Is(err, os.ErrPermission) && !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	message := "文件无法访问或已不存在，也可能是权限或路径问题；请查看 Windows 安全中心的保护历史，确认是否有对应记录。"
+	if blocked {
+		message = "Windows 返回了安全检测、签名或策略阻止错误。请查看保护历史中的检测详情，并核实组件来源。"
+	}
+	wailsruntime.EventsEmit(a.ctx, "frpcSecurityNotice", map[string]string{
+		"path": path, "stage": stage, "message": message,
+	})
+}
+
+func clearFrpcCache(dir string) error {
+	path := filepath.Join(dir, frpcBinaryName())
+	for _, name := range []string{path, path + ".part", path + frpcHashSuffix} {
+		if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("删除 frpc 缓存失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// ManageFrpcCache shares the bandwidth task guard so an in-use client is never removed.
+func (a *App) ManageFrpcCache(redownload bool) (string, error) {
+	if !atomic.CompareAndSwapInt32(&a.bwBusy, 0, 1) {
+		return "", fmt.Errorf("带宽测速或 frpc 管理正在进行，请结束后重试")
+	}
+	defer atomic.StoreInt32(&a.bwBusy, 0)
+	dir, err := frpcCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("打开 frpc 缓存目录失败: %w", err)
+	}
+	if err := clearFrpcCache(dir); err != nil {
+		return "", err
+	}
+	if !redownload {
+		return "frpc 下载缓存已删除，下次带宽测速时会按需下载。", nil
+	}
+	if err := downloadFrpc(filepath.Join(dir, frpcBinaryName()), func(progress float64, message string) {
+		if a.ctx != nil {
+			wailsruntime.EventsEmit(a.ctx, "frpcCacheProgress", map[string]interface{}{
+				"progress": progress, "message": message,
+			})
+		}
+	}); err != nil {
+		a.reportFrpcFailure(filepath.Join(dir, frpcBinaryName()), "下载 frpc", err)
+		return "", err
+	}
+	return "frpc 下载完成，已保存到下载缓存。", nil
+}
+
+func (a *App) IsFrpcReady() (bool, error) {
+	if !atomic.CompareAndSwapInt32(&a.bwBusy, 0, 1) {
+		return false, fmt.Errorf("带宽测速或 frpc 管理正在进行，请结束后重试")
+	}
+	defer atomic.StoreInt32(&a.bwBusy, 0)
+	_, ready := findLocalFrpc()
+	return ready, nil
+}
+
+// PrepareFrpc is called only after the user confirms the download.
+func (a *App) PrepareFrpc() error {
+	if !atomic.CompareAndSwapInt32(&a.bwBusy, 0, 1) {
+		return fmt.Errorf("带宽测速或 frpc 管理正在进行，请结束后重试")
+	}
+	defer atomic.StoreInt32(&a.bwBusy, 0)
+	_, err := ensureFrpc(func(progress float64, message string) {
+		if a.ctx != nil {
+			wailsruntime.EventsEmit(a.ctx, "frpcCacheProgress", map[string]interface{}{
+				"progress": progress, "message": message,
+			})
+		}
+	})
+	if err != nil {
+		if dir, cacheErr := frpcCacheDir(); cacheErr == nil {
+			a.reportFrpcFailure(filepath.Join(dir, frpcBinaryName()), "下载 frpc", err)
+		}
+	}
+	return err
+}
 
 // fileSHA256 计算文件内容的 sha256（十六进制小写）
 func fileSHA256(path string) (string, error) {

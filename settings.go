@@ -23,7 +23,7 @@ import (
 const (
 	defaultTestSeconds = 10
 	minTestSeconds     = 5
-	maxTestSeconds     = 60
+	maxTestSeconds     = 30
 
 	defaultBWParallel = 6
 	minBWParallel     = 1
@@ -33,9 +33,10 @@ const (
 // AppSettings 是落盘配置。数值字段在读取/保存时都会 clamp，
 // 旧版本/手工编辑写坏的值不会让测速跑出异常参数。
 type AppSettings struct {
-	TestSeconds int    `json:"testSeconds"`
-	BWParallel  int    `json:"bwParallel"`
-	CloseAction string `json:"closeAction,omitempty"` // ask | tray | quit
+	TestSeconds         int    `json:"testSeconds"`
+	BWParallel          int    `json:"bwParallel"`
+	BWTunnelConcurrency int    `json:"bwTunnelConcurrency"`
+	CloseAction         string `json:"closeAction,omitempty"` // ask | tray | quit
 }
 
 var (
@@ -54,6 +55,16 @@ func normalizeTestSeconds(v int) int {
 	}
 	if v > maxTestSeconds {
 		return maxTestSeconds
+	}
+	return v
+}
+
+func normalizeTunnelConcurrency(v int) int {
+	if v == 0 {
+		return 2
+	}
+	if v < 1 {
+		return 1
 	}
 	return v
 }
@@ -128,6 +139,7 @@ func (a *App) loadSettings() {
 	}
 	next.TestSeconds = normalizeTestSeconds(next.TestSeconds)
 	next.BWParallel = normalizeBWParallel(next.BWParallel)
+	next.BWTunnelConcurrency = normalizeTunnelConcurrency(next.BWTunnelConcurrency)
 	next.CloseAction = normalizeCloseAction(next.CloseAction)
 
 	settingsMu.Lock()
@@ -170,12 +182,14 @@ func (a *App) GetSettings() AppSettings {
 	settingsMu.RUnlock()
 	s.TestSeconds = normalizeTestSeconds(s.TestSeconds)
 	s.BWParallel = normalizeBWParallel(s.BWParallel)
+	s.BWTunnelConcurrency = normalizeTunnelConcurrency(s.BWTunnelConcurrency)
 	s.CloseAction = normalizeCloseAction(s.CloseAction)
 	return s
 }
 
 // SaveSettings 供设置页调用；返回后端实际生效的值（可能被 clamp）。
 func (a *App) SaveSettings(s AppSettings) (AppSettings, error) {
+	s.BWTunnelConcurrency = normalizeTunnelConcurrency(s.BWTunnelConcurrency)
 	s.TestSeconds = normalizeTestSeconds(s.TestSeconds)
 	s.BWParallel = normalizeBWParallel(s.BWParallel)
 	action := normalizeCloseAction(s.CloseAction)

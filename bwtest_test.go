@@ -7,9 +7,38 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestBandwidthWorkers(t *testing.T) {
+	for _, tc := range []struct{ desired, selected, want int }{
+		{0, 5, 2}, {3, 5, 3}, {9, 8, 8},
+		{2, 1, 1}, {2, 0, 0}, {-1, 5, 1},
+	} {
+		if got := bandwidthWorkers(tc.desired, tc.selected); got != tc.want {
+			t.Fatalf("%+v: got %d", tc, got)
+		}
+	}
+}
+
+func TestBandwidthResourceIsolation(t *testing.T) {
+	a := NewApp()
+	var wg sync.WaitGroup
+	for id := 1; id <= 8; id++ {
+		wg.Add(1)
+		go func(id int) { defer wg.Done(); a.trackBWResource(nil, id, "test") }(id)
+	}
+	wg.Wait()
+	a.clearBWResource(3)
+	if len(a.bwResources) != 7 {
+		t.Fatalf("resource ownership lost: %d", len(a.bwResources))
+	}
+	if _, ok := a.bwResources[4]; !ok {
+		t.Fatal("clearing one task removed another")
+	}
+}
 
 // TestBWServerThroughput 不经过隧道，直接对本地数据源打流，
 // 验证分时打流（先下行再上行）、预热剔除与平均速率计算（回环带宽应远高于 50Mbps）。

@@ -26,7 +26,7 @@ func TestSettingsDefaultsAndClamp(t *testing.T) {
 	a := &App{}
 	a.loadSettings()
 	got := a.GetSettings()
-	if got.TestSeconds != defaultTestSeconds || got.BWParallel != defaultBWParallel {
+	if got.TestSeconds != defaultTestSeconds || got.BWParallel != defaultBWParallel || got.BWTunnelConcurrency != 2 {
 		t.Fatalf("默认值不对: %+v", got)
 	}
 	if got.CloseAction != "" {
@@ -50,6 +50,26 @@ func TestSettingsDefaultsAndClamp(t *testing.T) {
 	got = b.GetSettings()
 	if got.TestSeconds != minTestSeconds || got.BWParallel != maxBWParallel || got.CloseAction != "tray" {
 		t.Fatalf("重载结果不对: %+v", got)
+	}
+}
+
+func TestParallelSettingsAndDurationLimit(t *testing.T) {
+	withTempSettingsDir(t)
+	a := NewApp()
+	a.loadSettings()
+	saved, err := a.SaveSettings(AppSettings{TestSeconds: 60, BWTunnelConcurrency: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.TestSeconds != 30 || saved.BWTunnelConcurrency != 3 {
+		t.Fatalf("unexpected settings: %+v", saved)
+	}
+	a.loadSettings()
+	if got := a.GetSettings(); got.TestSeconds != 30 || got.BWTunnelConcurrency != 3 {
+		t.Fatalf("settings not persisted: %+v", got)
+	}
+	if normalizeTunnelConcurrency(-1) != 1 || normalizeTunnelConcurrency(0) != 2 {
+		t.Fatal("invalid concurrency normalization")
 	}
 }
 

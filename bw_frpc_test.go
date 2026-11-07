@@ -5,14 +5,76 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestFrpcSecurityError(t *testing.T) {
+	for _, code := range []syscall.Errno{225, 226, 577, 1260} {
+		err := fmt.Errorf("operation failed: %w", &os.PathError{Op: "open", Path: "frpc.exe", Err: code})
+		if !frpcSecurityError(err) {
+			t.Fatalf("security error %d was not recognized", code)
+		}
+	}
+	for _, err := range []error{nil, os.ErrPermission, os.ErrNotExist, fmt.Errorf("network timeout")} {
+		if frpcSecurityError(err) {
+			t.Fatalf("ordinary error misclassified as a security block: %v", err)
+		}
+	}
+}
+
+func TestClearFrpcCache(t *testing.T) {
+	dir := t.TempDir()
+	name := frpcBinaryName()
+	for _, file := range []string{name, name + ".part", name + frpcHashSuffix, "keep.ini"} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte("test"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := clearFrpcCache(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{name, name + ".part", name + frpcHashSuffix} {
+		if _, err := os.Stat(filepath.Join(dir, file)); !os.IsNotExist(err) {
+			t.Fatalf("cache file %s still exists: %v", file, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "keep.ini")); err != nil {
+		t.Fatalf("unrelated file must be preserved: %v", err)
+	}
+}
+
+func TestManageFrpcCacheRejectsBusy(t *testing.T) {
+	a := NewApp()
+	atomic.StoreInt32(&a.bwBusy, 1)
+	for _, redownload := range []bool{false, true} {
+		if _, err := a.ManageFrpcCache(redownload); err == nil {
+			t.Fatal("cache management must reject an active bandwidth task")
+		}
+		if atomic.LoadInt32(&a.bwBusy) != 1 {
+			t.Fatal("cache management released another task's guard")
+		}
+	}
+	if _, err := a.IsFrpcReady(); err == nil {
+		t.Fatal("readiness check must reject an active bandwidth task")
+	}
+	if err := a.PrepareFrpc(); err == nil {
+		t.Fatal("component preparation must reject an active bandwidth task")
+	}
+	if atomic.LoadInt32(&a.bwBusy) != 1 {
+		t.Fatal("component preparation released another task's guard")
+	}
+}
 
 // frpcTestServer 起一个本地"官方下载表 + frpc 文件"服务，
 // 返回 server 和 payload，供续传 / 校验测试使用。

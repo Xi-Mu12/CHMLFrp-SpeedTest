@@ -41,6 +41,10 @@ func main() {
 			app.startTray()
 		},
 		OnBeforeClose: app.handleBeforeClose,
+		OnShutdown: func(ctx context.Context) {
+			app.quitting.Store(true)
+			app.CleanupBandwidth()
+		},
 		Bind: []interface{}{
 			app,
 		},

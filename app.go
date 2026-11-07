@@ -37,10 +37,12 @@ type App struct {
 	authCancel   context.CancelFunc
 
 	// 带宽测速期间的活跃 frpc 进程/临时隧道，退出时兜底清理
-	bwMu       sync.Mutex
-	bwProc     *frpcProc
-	bwTunnelID int
-	bwToken    string
+	bwMu        sync.Mutex
+	bwResources map[int]bwResource
+	bwProgress  map[int]float64
+	bwActive    int
+	bwCompleted int
+	bwFinished  chan struct{}
 }
 
 // NewApp 创建 App 应用结构体
