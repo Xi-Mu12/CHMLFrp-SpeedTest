@@ -37,6 +37,12 @@ type AppSettings struct {
 	BWParallel          int    `json:"bwParallel"`
 	BWTunnelConcurrency int    `json:"bwTunnelConcurrency"`
 	CloseAction         string `json:"closeAction,omitempty"` // ask | tray | quit
+
+	// 更新偏好。DisableAutoUpdate 用反向布尔：旧配置里没有该字段时
+	// 反序列化为 false，即默认开启自动检查，符合新装用户的预期。
+	DisableAutoUpdate bool   `json:"disableAutoUpdate,omitempty"`
+	SkippedVersion    string `json:"skippedVersion,omitempty"`
+	LastUpdateCheck   int64  `json:"lastUpdateCheck,omitempty"`
 }
 
 var (
@@ -175,6 +181,17 @@ func saveSettings(s AppSettings) error {
 	return nil
 }
 
+// mutateSettings 只修改指定字段并落盘，避免整结构体覆盖。
+// 更新偏好（跳过版本、最近检查时间）走这里，不经过前端传来的 SaveSettings。
+func (a *App) mutateSettings(fn func(*AppSettings)) error {
+	settingsMu.Lock()
+	s := appSettings
+	fn(&s)
+	appSettings = s
+	settingsMu.Unlock()
+	return saveSettings(s)
+}
+
 // GetSettings 返回当前配置快照。
 func (a *App) GetSettings() AppSettings {
 	settingsMu.RLock()
@@ -201,6 +218,11 @@ func (a *App) SaveSettings(s AppSettings) (AppSettings, error) {
 		action = a.GetSettings().CloseAction
 	}
 	s.CloseAction = action
+	// 更新偏好由独立接口维护；前端保存测速参数时整体覆盖结构体会把它们清空。
+	cur := a.GetSettings()
+	s.DisableAutoUpdate = cur.DisableAutoUpdate
+	s.SkippedVersion = cur.SkippedVersion
+	s.LastUpdateCheck = cur.LastUpdateCheck
 	if err := saveSettings(s); err != nil {
 		return AppSettings{}, err
 	}

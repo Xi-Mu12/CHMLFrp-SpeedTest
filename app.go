@@ -43,6 +43,13 @@ type App struct {
 	bwActive    int
 	bwCompleted int
 	bwFinished  chan struct{}
+
+	// 自动更新：状态机与下载暂存目录。updateBusy 防止检查/下载并发进入。
+	updateMu     sync.Mutex
+	updateState  UpdateState
+	updateCancel context.CancelFunc
+	updateStage  string
+	updateBusy   atomic.Bool
 }
 
 // NewApp 创建 App 应用结构体
