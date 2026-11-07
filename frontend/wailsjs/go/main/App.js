@@ -18,6 +18,14 @@ export function CancelSpeedTest() {
   return window['go']['main']['App']['CancelSpeedTest']();
 }
 
+export function CancelUpdateDownload() {
+  return window['go']['main']['App']['CancelUpdateDownload']();
+}
+
+export function CheckForUpdate(arg1) {
+  return window['go']['main']['App']['CheckForUpdate'](arg1);
+}
+
 export function CleanupBandwidth() {
   return window['go']['main']['App']['CleanupBandwidth']();
 }
@@ -62,8 +70,20 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
+export function GetUpdatePrefs() {
+  return window['go']['main']['App']['GetUpdatePrefs']();
+}
+
+export function GetUpdateState() {
+  return window['go']['main']['App']['GetUpdateState']();
+}
+
 export function HideToTray() {
   return window['go']['main']['App']['HideToTray']();
+}
+
+export function InstallUpdateAndRestart() {
+  return window['go']['main']['App']['InstallUpdateAndRestart']();
 }
 
 export function IsFrpcReady() {
@@ -118,6 +138,10 @@ export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
+export function SetAutoUpdateCheck(arg1) {
+  return window['go']['main']['App']['SetAutoUpdateCheck'](arg1);
+}
+
 export function SetAutostart(arg1) {
   return window['go']['main']['App']['SetAutostart'](arg1);
 }
@@ -130,6 +154,10 @@ export function SetRememberLogin(arg1) {
   return window['go']['main']['App']['SetRememberLogin'](arg1);
 }
 
+export function SkipUpdateVersion(arg1) {
+  return window['go']['main']['App']['SkipUpdateVersion'](arg1);
+}
+
 export function StartPrefer(arg1) {
   return window['go']['main']['App']['StartPrefer'](arg1);
 }
@@ -140,4 +168,8 @@ export function StartQZhuaLogin() {
 
 export function StartSpeedTest(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartSpeedTest'](arg1, arg2, arg3);
+}
+
+export function StartUpdateDownload() {
+  return window['go']['main']['App']['StartUpdateDownload']();
 }

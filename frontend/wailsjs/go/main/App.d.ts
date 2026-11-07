@@ -10,6 +10,10 @@ export function CancelQZhuaLogin():Promise<void>;
 
 export function CancelSpeedTest():Promise<void>;
 
+export function CancelUpdateDownload():Promise<void>;
+
+export function CheckForUpdate(arg1:boolean):Promise<main.UpdateState>;
+
 export function CleanupBandwidth():Promise<void>;
 
 export function ExportRunLog(arg1:string):Promise<string>;
@@ -32,7 +36,13 @@ export function GetSessionState():Promise<main.SessionState>;
 
 export function GetSettings():Promise<main.AppSettings>;
 
+export function GetUpdatePrefs():Promise<main.UpdatePrefs>;
+
+export function GetUpdateState():Promise<main.UpdateState>;
+
 export function HideToTray():Promise<void>;
+
+export function InstallUpdateAndRestart():Promise<void>;
 
 export function IsFrpcReady():Promise<boolean>;
 
@@ -60,14 +70,20 @@ export function SaveImage(arg1:string):Promise<string>;
 
 export function SaveSettings(arg1:main.AppSettings):Promise<main.AppSettings>;
 
+export function SetAutoUpdateCheck(arg1:boolean):Promise<void>;
+
 export function SetAutostart(arg1:boolean):Promise<void>;
 
 export function SetCloseAction(arg1:string):Promise<void>;
 
 export function SetRememberLogin(arg1:boolean):Promise<void>;
 
+export function SkipUpdateVersion(arg1:string):Promise<void>;
+
 export function StartPrefer(arg1:Array<number>):Promise<void>;
 
 export function StartQZhuaLogin():Promise<main.QZhuaLoginStart>;
 
 export function StartSpeedTest(arg1:number,arg2:number,arg3:Array<number>):Promise<void>;
+
+export function StartUpdateDownload():Promise<void>;

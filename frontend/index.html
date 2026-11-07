@@ -144,6 +144,19 @@
         </div>
 
         <div id="closeAskModal" class="bandwidth-modal hidden" role="dialog" aria-modal="true" aria-labelledby="closeAskTitle" aria-describedby="closeAskDescription"><div class="bandwidth-modal-backdrop" id="closeAskBackdrop"></div><div class="bandwidth-modal-card close-ask-card"><button id="closeAskDismiss" class="close-ask-dismiss" type="button" title="关闭弹窗" aria-label="关闭弹窗">×</button><div class="close-ask-head"><b id="closeAskTitle">关闭窗口</b><small id="closeAskDescription">最小化后应用将在系统托盘中继续运行；退出将停止后台任务并关闭应用。</small></div><p class="close-ask-note">选择最小化后会记住此选择，可在设置中修改。</p><div class="close-ask-actions"><button id="closeAskTray" type="button">最小化</button><button id="closeAskExit" type="button">退出</button></div></div></div>
+        <div id="updateModal" class="bandwidth-modal hidden" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+            <div class="bandwidth-modal-backdrop"></div>
+            <div class="bandwidth-modal-card update-card">
+                <div class="modal-titlebar"><span id="updateTitle">软件更新</span><button id="closeUpdate" class="modal-close" type="button" aria-label="关闭">×</button></div>
+                <div class="update-body">
+                    <div class="update-head"><span id="updateBadge" class="update-badge">发现新版本</span><b id="updateVersion" class="update-version">--</b><span id="updateCurrent" class="update-current"></span></div>
+                    <pre id="updateNotes" class="update-notes"></pre>
+                    <p id="updateHint" class="update-hint"></p>
+                    <progress id="updateProgress" class="update-progress hidden" max="1" value="0" aria-label="更新下载进度"></progress>
+                </div>
+                <div class="task-actions update-actions"><button id="updateLater" class="btn secondary" type="button">稍后</button><button id="updateSkip" class="btn secondary" type="button">跳过此版本</button><button id="updateAction" class="btn primary" type="button">立即更新</button></div>
+            </div>
+        </div>
         <div id="loginModal" class="bandwidth-modal login-modal hidden">
             <div class="bandwidth-modal-backdrop" id="loginBackdrop"></div>
             <div class="bandwidth-modal-card login-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">

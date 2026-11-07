@@ -3,6 +3,7 @@ import { ManageFrpcCache, IsFrpcReady, PrepareFrpc } from '../wailsjs/go/main/Ap
 import { GetNodes, StartPrefer, CancelPrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, QuitApp, GetLocalIPs, GetMyIPInfo, QueryIPInfo, RequestClose, SetCloseAction, GetSettings, SaveSettings, AppendRunLog, ExportRunLog, GetRunLogPath } from '../wailsjs/go/main/App';
 import { EventsOn, WindowMinimise, WindowToggleMaximise, WindowGetPosition, WindowSetPosition, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { StartQZhuaLogin, LogoutQZhua, CancelQZhuaLogin, RestoreSession, SetRememberLogin } from '../wailsjs/go/main/App';
+import { CheckForUpdate, StartUpdateDownload, CancelUpdateDownload, InstallUpdateAndRestart, SkipUpdateVersion, GetUpdatePrefs, GetUpdateState, SetAutoUpdateCheck } from '../wailsjs/go/main/App';
 
 const $ = (id) => document.getElementById(id);
 
@@ -2190,6 +2191,184 @@ $('ipQueryBtn').addEventListener('click', () => queryIP());
 $('ipQueryInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') queryIP();
 });
+
+// ---------- 自动更新 ----------
+// 后端是唯一状态源：检查、下载、校验、暂存都在 Go 侧完成，
+// 前端只渲染 updateState 快照并触发动作，避免两套状态互相打架。
+const UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
+let updateSnapshot = { status: 'idle', currentVersion: '' };
+
+const formatSize = (bytes) => {
+    if (!bytes || bytes <= 0) return '0 MB';
+    const mb = bytes / 1048576;
+    return `${mb >= 100 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+};
+const updateRatio = (done, total) => (total > 0 ? Math.min(1, Math.max(0, done / total)) : 0);
+
+const updateSettings = document.createElement('div');
+updateSettings.className = 'settings-group';
+updateSettings.innerHTML = `<div class="settings-group-head">更新</div>
+    <div class="settings-card">
+        <div class="setting-row">
+            <div class="setting-text"><b>当前版本</b><small id="updateSettingsStatus">--</small></div>
+            <button id="checkUpdateBtn" class="btn secondary" type="button">检查更新</button>
+        </div>
+        <div class="setting-row">
+            <div class="setting-text"><b>启动时自动检查更新</b><small>每 12 小时最多检查一次；发现新版本时提示，可跳过指定版本。</small></div>
+            <input id="setAutoUpdate" type="checkbox" class="switch"/>
+        </div>
+    </div>`;
+document.querySelector('#view-settings .settings-list').append(updateSettings);
+
+function renderUpdateState(st) {
+    if (!st) return;
+    updateSnapshot = st;
+    const info = st.info || {};
+    const status = st.status || 'idle';
+    const current = String(st.currentVersion || '').replace(/^v/i, '');
+    const version = String(info.version || '').replace(/^v/i, '');
+
+    if ($('updateSettingsStatus') && status !== 'checking') {
+        $('updateSettingsStatus').textContent = current ? `当前版本 v${current}` : '--';
+    }
+    if (current) $('updateCurrent').textContent = `当前版本 v${current}`;
+    if (!['available', 'downloading', 'ready', 'error'].includes(status)) return;
+
+    if (version) $('updateVersion').textContent = `v${version}`;
+    const notes = $('updateNotes');
+    notes.textContent = info.notes || '（该版本未提供更新说明）';
+    notes.classList.toggle('hidden', status !== 'available');
+
+    const progress = $('updateProgress');
+    const hint = $('updateHint');
+    const action = $('updateAction');
+    const later = $('updateLater');
+    const skip = $('updateSkip');
+    const badge = $('updateBadge');
+
+    action.classList.add('primary');
+    action.classList.remove('secondary');
+    action.disabled = false;
+    progress.classList.toggle('hidden', status !== 'downloading');
+    later.classList.remove('hidden');
+    skip.classList.toggle('hidden', status !== 'available');
+
+    if (status === 'available') {
+        badge.textContent = '发现新版本';
+        hint.textContent = info.canAutoInstall ? '下载完成后重启软件即可完成更新。' : '当前平台暂不支持自动安装，将打开下载页面。';
+        action.textContent = info.canAutoInstall ? '立即更新' : '前往下载';
+    } else if (status === 'downloading') {
+        badge.textContent = '正在下载更新';
+        const ratio = updateRatio(st.downloaded, st.total);
+        hint.textContent = `${formatSize(st.downloaded)} / ${formatSize(st.total)} · ${Math.round(ratio * 100)}%`;
+        progress.value = ratio;
+        action.textContent = '取消下载';
+        action.classList.remove('primary');
+        action.classList.add('secondary');
+    } else if (status === 'ready') {
+        badge.textContent = '更新已准备就绪';
+        hint.textContent = '重启软件即可完成安装，也可以稍后手动重启。';
+        action.textContent = '立即重启';
+    } else {
+        badge.textContent = '更新失败';
+        hint.textContent = st.error || '更新过程中出现错误，请重试。';
+        action.textContent = '重试';
+    }
+    $('updateModal').classList.remove('hidden');
+}
+
+EventsOn('updateState', renderUpdateState);
+EventsOn('updateProgress', (ev) => {
+    if (updateSnapshot.status !== 'downloading') return;
+    const done = ev.downloaded || 0;
+    const total = ev.total || updateSnapshot.total || 0;
+    updateSnapshot.downloaded = done;
+    if (total) updateSnapshot.total = total;
+    const ratio = updateRatio(done, total);
+    $('updateProgress').value = ratio;
+    $('updateHint').textContent = `${formatSize(done)} / ${formatSize(total)} · ${Math.round(ratio * 100)}%`;
+});
+
+$('updateAction').addEventListener('click', async () => {
+    const st = updateSnapshot;
+    const info = st.info || {};
+    try {
+        if (st.status === 'available') {
+            if (!info.canAutoInstall) {
+                if (info.pageUrl) BrowserOpenURL(info.pageUrl);
+                return;
+            }
+            await StartUpdateDownload();
+        } else if (st.status === 'downloading') {
+            await CancelUpdateDownload();
+        } else if (st.status === 'ready') {
+            await InstallUpdateAndRestart();
+        } else if (st.status === 'error') {
+            const retried = await CheckForUpdate(true);
+            if (retried.status === 'available' && retried.info?.canAutoInstall) await StartUpdateDownload();
+        }
+    } catch (err) {
+        $('updateHint').textContent = String(err);
+    }
+});
+$('updateSkip').addEventListener('click', async () => {
+    const v = updateSnapshot?.info?.version;
+    $('updateModal').classList.add('hidden');
+    if (!v) return;
+    try {
+        await SkipUpdateVersion(v);
+    } catch (err) {
+        appendLog('prefer', 'err', '跳过版本失败：' + err);
+    }
+});
+$('updateLater').addEventListener('click', () => $('updateModal').classList.add('hidden'));
+$('closeUpdate').addEventListener('click', () => $('updateModal').classList.add('hidden'));
+$('updateModal').querySelector('.bandwidth-modal-backdrop').addEventListener('click', () => $('updateModal').classList.add('hidden'));
+
+$('checkUpdateBtn').addEventListener('click', async () => {
+    const btn = $('checkUpdateBtn');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    $('updateSettingsStatus').textContent = '正在检查更新…';
+    try {
+        const st = await CheckForUpdate(true);
+        if (st.status === 'uptodate') {
+            $('updateSettingsStatus').textContent = `已是最新版本 v${String(st.currentVersion || '').replace(/^v/i, '')}`;
+        } else if (st.status === 'error') {
+            $('updateSettingsStatus').textContent = st.error || '检查更新失败';
+        }
+    } catch (err) {
+        $('updateSettingsStatus').textContent = String(err);
+    } finally {
+        btn.disabled = false;
+    }
+});
+$('setAutoUpdate').addEventListener('change', async (e) => {
+    try {
+        await SetAutoUpdateCheck(e.target.checked);
+    } catch (err) {
+        e.target.checked = !e.target.checked;
+        appendLog('prefer', 'err', '保存更新设置失败：' + err);
+    }
+});
+
+async function initUpdater() {
+    try {
+        const [state, prefs] = await Promise.all([GetUpdateState(), GetUpdatePrefs()]);
+        renderUpdateState(state);
+        $('setAutoUpdate').checked = !prefs.disableAutoUpdate;
+        const current = String(prefs.currentVersion || '').replace(/^v/i, '');
+        $('updateSettingsStatus').textContent = current ? `当前版本 v${current}` : '--';
+        if (prefs.disableAutoUpdate) return;
+        // 启动 3 秒后再查，避免和节点拉取、登录恢复抢带宽。
+        const last = (prefs.lastUpdateCheck || 0) * 1000;
+        if (Date.now() - last < UPDATE_CHECK_INTERVAL_MS) return;
+        await CheckForUpdate(false);
+    } catch (err) {
+        // 自动检查失败保持安静，不影响正常使用。
+    }
+}
+setTimeout(initUpdater, 3000);
 
 // ---------- 启动 ----------
 applyTheme();

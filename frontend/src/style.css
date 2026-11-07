@@ -674,3 +674,22 @@
 @keyframes test-button-spin{from{transform:rotate(-90deg)}to{transform:rotate(270deg)}}
 @keyframes test-button-float{0%,100%{transform:translateY(1px)}50%{transform:translateY(-1px)}}
 @media(prefers-reduced-motion:reduce){.test-button-icon svg{animation:none!important;transition:none}}
+
+/* ---------- 自动更新 ---------- */
+.update-card{width:min(560px,calc(100vw - 48px))}
+.update-body{padding:22px 24px 4px;overflow:auto}
+.update-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.update-badge{font-size:11px;font-weight:600;line-height:1;padding:5px 9px;border-radius:999px;background:rgba(246,130,31,.16);color:#f6a04a;white-space:nowrap}
+.update-version{font-size:21px;letter-spacing:.3px;color:var(--text)}
+.update-current{font-size:11px;color:var(--dim)}
+.update-notes{max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:12px;line-height:1.75;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin:0;user-select:text}
+.update-hint{margin-top:14px;font-size:12px;color:var(--muted);line-height:1.6;min-height:18px}
+.update-progress{display:block;width:100%;height:6px;margin-top:14px;accent-color:var(--orange)}
+.update-progress.hidden{display:none}
+.update-actions{justify-content:flex-end;flex-wrap:wrap}
+.update-actions .btn{min-width:92px}
+:root[data-theme="light"] .update-notes{background:#f7f8fa;border-color:#e5e7eb;color:#4a5260}
+:root[data-theme="light"] .update-badge{background:#eef1f5;color:#4a5260}
+:root[data-theme="light"] .update-hint{color:#5a6473}
+@media(prefers-reduced-motion:reduce){.update-progress{transition:none}}
+
