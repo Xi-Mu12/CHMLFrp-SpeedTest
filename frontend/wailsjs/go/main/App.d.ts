@@ -34,9 +34,15 @@ export function GetSettings():Promise<main.AppSettings>;
 
 export function HideToTray():Promise<void>;
 
+export function IsFrpcReady():Promise<boolean>;
+
 export function LogoutQZhua():Promise<void>;
 
+export function ManageFrpcCache(arg1:boolean):Promise<string>;
+
 export function PauseSpeedTest():Promise<void>;
+
+export function PrepareFrpc():Promise<void>;
 
 export function QueryIPInfo(arg1:string):Promise<main.IPGeo>;
 

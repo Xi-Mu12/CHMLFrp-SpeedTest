@@ -66,12 +66,24 @@ export function HideToTray() {
   return window['go']['main']['App']['HideToTray']();
 }
 
+export function IsFrpcReady() {
+  return window['go']['main']['App']['IsFrpcReady']();
+}
+
 export function LogoutQZhua() {
   return window['go']['main']['App']['LogoutQZhua']();
 }
 
+export function ManageFrpcCache(arg1) {
+  return window['go']['main']['App']['ManageFrpcCache'](arg1);
+}
+
 export function PauseSpeedTest() {
   return window['go']['main']['App']['PauseSpeedTest']();
+}
+
+export function PrepareFrpc() {
+  return window['go']['main']['App']['PrepareFrpc']();
 }
 
 export function QueryIPInfo(arg1) {

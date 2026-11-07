@@ -19,6 +19,7 @@ export namespace main {
 	export class AppSettings {
 	    testSeconds: number;
 	    bwParallel: number;
+	    bwTunnelConcurrency: number;
 	    closeAction?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -29,6 +30,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.testSeconds = source["testSeconds"];
 	        this.bwParallel = source["bwParallel"];
+	        this.bwTunnelConcurrency = source["bwTunnelConcurrency"];
 	        this.closeAction = source["closeAction"];
 	    }
 	}

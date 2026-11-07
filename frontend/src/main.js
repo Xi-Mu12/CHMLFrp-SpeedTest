@@ -1,9 +1,38 @@
 import './style.css';
+import { ManageFrpcCache, IsFrpcReady, PrepareFrpc } from '../wailsjs/go/main/App';
 import { GetNodes, StartPrefer, CancelPrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, QuitApp, GetLocalIPs, GetMyIPInfo, QueryIPInfo, RequestClose, SetCloseAction, GetSettings, SaveSettings, AppendRunLog, ExportRunLog, GetRunLogPath } from '../wailsjs/go/main/App';
 import { EventsOn, WindowMinimise, WindowToggleMaximise, WindowGetPosition, WindowSetPosition, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { StartQZhuaLogin, LogoutQZhua, CancelQZhuaLogin, RestoreSession, SetRememberLogin } from '../wailsjs/go/main/App';
 
 const $ = (id) => document.getElementById(id);
+
+EventsOn('frpcSecurityNotice', (ev) => {
+    $('frpcSecurityTitle').textContent = `${ev.stage || 'frpc'}：文件访问受阻`;
+    $('frpcSecurityMessage').textContent = ev.message || '请查看 Windows 安全中心的保护历史。';
+    $('frpcSecurityPath').textContent = ev.path || '无法确定路径';
+    $('frpcSecurityModal').classList.remove('hidden');
+});
+$('frpcSecurityOK').addEventListener('click', () => $('frpcSecurityModal').classList.add('hidden'));
+$('frpcSecuritySettings').addEventListener('click', () => BrowserOpenURL('windowsdefender:'));
+$('frpcSecuritySubmit').addEventListener('click', () => BrowserOpenURL('https://www.microsoft.com/en-us/wdsi/filesubmission'));
+
+function setTestButtonState(btn, label, loading, testing = false) {
+    btn.querySelector('.test-button-label').textContent = label;
+    btn.classList.toggle('is-loading', loading);
+    btn.classList.toggle('is-testing', testing);
+    btn.setAttribute('aria-busy', String(loading));
+}
+
+['preferBtn', 'speedBtn'].forEach((id) => {
+    const btn = $(id);
+    const label = document.createElement('span');
+    label.className = 'test-button-label';
+    label.textContent = btn.textContent;
+    btn.classList.add('test-button');
+    btn.innerHTML = '<span class="test-button-icon" aria-hidden="true"><svg class="test-button-ring" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg><svg class="test-button-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 10-12h-7l1-8Z"/></svg></span>';
+    btn.append(label);
+    btn.setAttribute('aria-busy', 'false');
+});
 
 // 远端数据（节点名、接口错误串等）进 innerHTML 之前一律转义。
 // 节点名来自服务端接口，而页面里的脚本能直接调 Wails 绑定的后端方法，
@@ -17,10 +46,10 @@ document.querySelectorAll('.bandwidth-modal').forEach((modal) => document.body.a
 // ---------- 设置（Go settings.json 的运行时快照） ----------
 // 测速参数不在 localStorage 里存第二份：后端启动时读 settings.json，
 // 设置页保存后返回实际生效值（可能被后端 clamp）。
-const settings = { testSeconds: 10, bwParallel: 6 };
+const settings = { testSeconds: 10, bwParallel: 6, bwTunnelConcurrency: 2 };
 const clampInt = (value, min, max, fallback) => {
     const n = Number.parseInt(value, 10);
-    if (!Number.isFinite(n)) return fallback;
+    if (!Number.isFinite(n)) return Math.min(max, Math.max(min, fallback));
     return Math.min(max, Math.max(min, n));
 };
 // 已选卡片（多选，点击卡片切换，全选按钮批量，持久化）
@@ -56,37 +85,44 @@ async function saveCloseAction(action) {
 async function initSettings() {
     let s = null;
     try { s = await GetSettings(); } catch { /* 绑定不可用时按默认值处理 */ }
-    if (!s) s = { testSeconds: 10, bwParallel: 6, closeAction: '' };
+    if (!s) s = { testSeconds: 10, bwParallel: 6, bwTunnelConcurrency: 2, closeAction: '' };
     if (!s.closeAction) {
         // 从 A 组版本的 localStorage 迁移一次；迁移后以 Go settings.json 为准。
         s.closeAction = localStorage.getItem('closeAction') === 'tray' ? 'tray' : 'ask';
         try {
             await SaveSettings({
-                testSeconds: s.testSeconds,
+                testSeconds: clampInt(s.testSeconds, 5, 30, 10),
                 bwParallel: s.bwParallel,
+                bwTunnelConcurrency: clampInt(s.bwTunnelConcurrency, 1, Number.MAX_SAFE_INTEGER, 2),
                 closeAction: s.closeAction,
             });
         } catch { /* 保存失败也不阻塞启动 */ }
         localStorage.removeItem('closeAction');
     }
-    settings.testSeconds = clampInt(s.testSeconds, 5, 60, 10);
+    settings.testSeconds = clampInt(s.testSeconds, 5, 30, 10);
     settings.bwParallel = clampInt(s.bwParallel, 1, 8, 6);
+    settings.bwTunnelConcurrency = clampInt(s.bwTunnelConcurrency, 1, Number.MAX_SAFE_INTEGER, 2);
+    syncTunnelConcurrency();
     closeAction = s.closeAction === 'tray' ? 'tray' : 'ask';
     if ($('setTestSeconds')) $('setTestSeconds').value = String(settings.testSeconds);
     if ($('setBWParallel')) $('setBWParallel').value = String(settings.bwParallel);
     syncTraySwitch();
 }
 async function saveTestSettings() {
-    const secs = clampInt($('setTestSeconds').value, 5, 60, settings.testSeconds);
+    const secs = clampInt($('setTestSeconds').value, 5, 30, settings.testSeconds);
     const parallel = clampInt($('setBWParallel').value, 1, 8, settings.bwParallel);
+    const concurrency = clampInt($('setBWTunnelConcurrency').value, 1, Number.MAX_SAFE_INTEGER, settings.bwTunnelConcurrency);
     try {
-        const saved = await SaveSettings({ testSeconds: secs, bwParallel: parallel, closeAction });
-        settings.testSeconds = clampInt(saved.testSeconds, 5, 60, 10);
+        const saved = await SaveSettings({ testSeconds: secs, bwParallel: parallel, bwTunnelConcurrency: concurrency, closeAction });
+        settings.testSeconds = clampInt(saved.testSeconds, 5, 30, 10);
         settings.bwParallel = clampInt(saved.bwParallel, 1, 8, 6);
+        settings.bwTunnelConcurrency = clampInt(saved.bwTunnelConcurrency, 1, Number.MAX_SAFE_INTEGER, concurrency);
+        syncTunnelConcurrency();
         $('setTestSeconds').value = String(settings.testSeconds);
         $('setBWParallel').value = String(settings.bwParallel);
         appendLog('prefer', 'ok', `测速参数已保存：单节点 ${settings.testSeconds} 秒 · 单方向 ${settings.bwParallel} 条连接`);
     } catch (err) {
+        syncTunnelConcurrency();
         $('setTestSeconds').value = String(settings.testSeconds);
         $('setBWParallel').value = String(settings.bwParallel);
         appendLog('prefer', 'err', '保存测速参数失败：' + err);
@@ -107,6 +143,7 @@ $('closeAskExit').addEventListener('click', () => {
     QuitApp();
 });
 $('closeAskBackdrop').addEventListener('click', () => $('closeAskModal').classList.add('hidden'));
+$('closeAskDismiss').addEventListener('click', () => $('closeAskModal').classList.add('hidden'));
 $('setTray').addEventListener('change', async (e) => {
     try {
         await saveCloseAction(e.target.checked ? 'tray' : 'ask');
@@ -119,24 +156,109 @@ $('setTestSeconds').addEventListener('change', saveTestSettings);
 $('setBWParallel').addEventListener('change', saveTestSettings);
 syncTraySwitch();
 
+const tunnelConcurrencyRow = document.createElement('div');
+tunnelConcurrencyRow.className = 'setting-row';
+tunnelConcurrencyRow.innerHTML = `<div class="setting-text"><b>并行测速隧道数</b><small id="bwTunnelConcurrencyHint">自行填写同时测速的隧道数量，最少 1 条，默认 2 条；不预先检查配额，服务端拒绝创建时会停止测速。</small></div><div class="setting-value"><input id="setBWTunnelConcurrency" aria-label="并行测速隧道数" aria-describedby="bwTunnelConcurrencyHint" class="setting-input" type="number" min="1" step="1" value="2"/><span>条</span></div>`;
+$('setBWParallel').closest('.settings-card').append(tunnelConcurrencyRow);
+$('setBWTunnelConcurrency').addEventListener('change', saveTestSettings);
+$('setTestSeconds').max = '30';
+$('setTestSeconds').closest('.setting-row').querySelector('small').textContent = '带宽测速每个节点跑多久，上下行各占一半；范围 5~30 秒';
+document.querySelector('#speedTaskModal .batch-row b').innerHTML = '<span id="taskTunnelConcurrency">2（期望）</span>';
+document.querySelector('#speedTaskModal .batch-note li').textContent = '将按填写的并发数测速；隧道是否可创建以服务端返回为准，明确拒绝时停止并清理任务。';
+
+function syncTunnelConcurrency() {
+    $('setBWTunnelConcurrency').value = String(settings.bwTunnelConcurrency);
+}
+
+const frpcSettings = document.createElement('div');
+frpcSettings.className = 'settings-group';
+frpcSettings.innerHTML = `<div class="settings-group-head">frpc 测速组件</div>
+    <div class="settings-card">
+        <div class="setting-row frpc-cache-row">
+            <div class="setting-text"><b>下载缓存管理</b><small>仅管理本应用下载的 frpc 缓存，包含未完成的下载；程序目录和 resources 中自行放置的 frpc 不受影响，测速时仍优先使用。</small></div>
+            <div class="frpc-cache-actions"><button id="deleteFrpcBtn" class="btn secondary" type="button">删除 frpc</button><button id="redownloadFrpcBtn" class="btn secondary" type="button">重新下载 frpc</button></div>
+        </div>
+        <div class="frpc-cache-feedback"><p id="frpcCacheStatus" role="status" aria-live="polite">带宽测速期间无法管理组件。</p><progress id="frpcCacheProgress" class="hidden" max="1" value="0" aria-label="frpc 下载进度"></progress></div>
+    </div>`;
+document.querySelector('#view-settings .settings-list').append(frpcSettings);
+let frpcCacheBusy = false;
+EventsOn('frpcCacheProgress', (ev) => {
+    if (!frpcCacheBusy) return;
+    $('frpcCacheStatus').textContent = ev.message || '正在下载 frpc…';
+    $('frpcCacheProgress').value = ev.progress || 0;
+    if (!$('frpcDownloadModal').classList.contains('hidden')) {
+        $('frpcDownloadStatus').textContent = ev.message || '正在下载 frpc…';
+        $('frpcDownloadProgress').value = Math.min(1, Math.max(0, ev.progress || 0));
+    }
+});
+async function manageFrpcCache(redownload, prepare = false) {
+    if (frpcCacheBusy) return;
+    if (speedRunning) {
+        $('frpcCacheStatus').textContent = '请先停止带宽测速，再管理 frpc。';
+        return;
+    }
+    frpcCacheBusy = true;
+    $('deleteFrpcBtn').disabled = true;
+    $('redownloadFrpcBtn').disabled = true;
+    $('frpcCacheStatus').textContent = redownload ? '准备重新下载 frpc…' : '正在删除 frpc 下载缓存…';
+    $('frpcCacheProgress').value = 0;
+    $('frpcCacheProgress').classList.toggle('hidden', !redownload);
+    updateBandwidthRunUI();
+    try {
+        const message = prepare
+            ? (await PrepareFrpc(), 'frpc 下载完成，可以开始测速。')
+            : await ManageFrpcCache(redownload);
+        $('frpcCacheStatus').textContent = message;
+        appendSpeedLog('ok', message);
+        return true;
+    } catch (err) {
+        $('frpcCacheStatus').textContent = '操作失败：' + err;
+        if (prepare) $('frpcDownloadStatus').textContent = '下载失败：' + err;
+        appendSpeedLog('err', 'frpc 缓存管理失败：' + err);
+        return false;
+    } finally {
+        frpcCacheBusy = false;
+        $('deleteFrpcBtn').disabled = false;
+        $('redownloadFrpcBtn').disabled = false;
+        $('frpcCacheProgress').classList.add('hidden');
+        updateBandwidthRunUI();
+    }
+}
+$('deleteFrpcBtn').addEventListener('click', () => manageFrpcCache(false));
+$('redownloadFrpcBtn').addEventListener('click', () => manageFrpcCache(true));
+
+function closeFrpcDownload() {
+    if (!frpcCacheBusy) $('frpcDownloadModal').classList.add('hidden');
+}
+['closeFrpcDownload', 'cancelFrpcDownload', 'frpcDownloadBackdrop'].forEach((id) => {
+    $(id).addEventListener('click', closeFrpcDownload);
+});
+$('confirmFrpcDownload').addEventListener('click', async () => {
+    if (frpcCacheBusy || speedRunning || speedStarting) return;
+    const controls = ['confirmFrpcDownload', 'cancelFrpcDownload', 'closeFrpcDownload'];
+    controls.forEach((id) => { $(id).disabled = true; });
+    $('confirmFrpcDownload').textContent = '下载中…';
+    $('frpcDownloadStatus').textContent = '正在准备下载，尚未开始测速…';
+    $('frpcDownloadProgress').value = 0;
+    $('frpcDownloadProgress').classList.remove('hidden');
+    try {
+        if (await manageFrpcCache(true, true)) {
+            $('frpcDownloadModal').classList.add('hidden');
+            showSpeedTask();
+        }
+    } finally {
+        controls.forEach((id) => { $(id).disabled = false; });
+        $('confirmFrpcDownload').textContent = '下载 frpc';
+        $('frpcDownloadProgress').classList.add('hidden');
+    }
+});
+
 let qzhuaLoggedIn = false;
 let loginVerifyUrl = '';
-let qzhuaProfile = null;
 
 const setText = (id, value, fallback = '—') => {
     const el = $(id);
     if (el) el.textContent = value === undefined || value === null || value === '' ? fallback : String(value);
-};
-const formatBytes = (value) => {
-    const bytes = Number(value || 0);
-    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-    return `${(bytes / 1024 ** index).toFixed(index ? 2 : 0)} ${units[index]}`;
-};
-const formatBandwidth = (value) => {
-    const mbps = Number(value || 0);
-    return Number.isFinite(mbps) && mbps > 0 ? `${mbps} Mbps` : '—';
 };
 const setAvatar = (img, source, fallbackText) => {
     if (!img) return;
@@ -153,8 +275,7 @@ const setAvatar = (img, source, fallbackText) => {
         img.classList.add('avatar-fallback');
     }
 };
-const renderQZhuaProfile = (profile, apiError = '') => {
-    qzhuaProfile = profile || null;
+const renderQZhuaProfile = (profile) => {
     const qzhua = profile?.qzhua || {};
     const chml = profile?.chml || null;
     // 设备码流程只申请 chmlfrp_api scope，OIDC userinfo 可能取不到昵称和头像；
@@ -165,34 +286,7 @@ const renderQZhuaProfile = (profile, apiError = '') => {
     setText('accSubtitle', chml?.usergroup || qzhua.email || '已登录');
     $('sideAccount').classList.add('logged-in');
     setAvatar($('accAvatar'), picture, name.slice(0, 1));
-
-    setAvatar($('profileAvatar'), picture, name.slice(0, 1));
-    setText('profileTitle', name);
-    setText('profileEmail', chml?.email || qzhua.email || '已登录');
-    setText('profileSub', qzhua.sub || '—');
-    setText('profileNickname', name);
-
-    const state = $('profileApiState');
-    if (state) {
-        state.textContent = apiError
-            ? `OAuth 登录成功，但 CHMLFrp 账户资料暂时无法获取：${apiError}`
-            : (chml ? '已同步 CHMLFrp 账户资料' : '已登录，等待账户资料');
-        state.classList.toggle('is-error', Boolean(apiError));
-    }
-    $('chmlProfileSection').classList.toggle('hidden', !chml);
-    if (!chml) return;
-    setText('profileUserGroup', chml.usergroup);
-    setText('profileBandwidth', formatBandwidth(chml.bandwidth));
-    setText('profileTunnel', `${chml.tunnel ?? 0} / ${chml.tunnnelCount ?? '—'}`);
-    setText('profileConnections', chml.totalCurConns ?? 0);
-    setText('profileUpload', formatBytes(chml.total_upload));
-    setText('profileDownload', formatBytes(chml.total_download));
-    setText('profileIntegral', chml.integral ?? 0);
-    setText('profileRealname', chml.realname);
-    setText('profileTerm', chml.term);
 };
-const closeProfileModal = () => $('profileModal').classList.add('hidden');
-const openProfileModal = () => $('profileModal').classList.remove('hidden');
 
 const showLoginStep1 = () => {
     $('loginStep1').classList.remove('hidden');
@@ -215,7 +309,7 @@ EventsOn('qzhuaAuth', (event) => {
             username: event.username,
             email: event.email,
             picture: event.picture,
-        } }, event.apiError || '');
+        } });
         $('loginModal').classList.add('hidden');
         // 登录成功：撤掉节点区的登录引导，并真正去拉节点（未登录期间不展示卡片）
         ensureLoginHint($('groups'));
@@ -224,7 +318,6 @@ EventsOn('qzhuaAuth', (event) => {
         return;
     }
     qzhuaLoggedIn = false;
-    qzhuaProfile = null;
     $('sideAccount').classList.remove('logged-in');
     $('accAvatar').removeAttribute('src');
     $('accTitle').textContent = '未登录';
@@ -244,17 +337,12 @@ EventsOn('qzhuaAuth', (event) => {
         return;
     }
     $('accSubtitle').textContent = '点击登录';
-    closeProfileModal();
     // 退出登录/登录态失效：节点卡片一并收掉，回到登录引导
     renderLoginOnly();
 });
 
-$('sideAccount').addEventListener('click', () => {
-    if (qzhuaLoggedIn) {
-        openProfileModal();
-        return;
-    }
-    openLoginModal();
+$('accountLoginBtn').addEventListener('click', () => {
+    if (!qzhuaLoggedIn) openLoginModal();
 });
 
 $('loginAuthBtn').addEventListener('click', async () => {
@@ -293,11 +381,19 @@ $('loginCancelBtn').addEventListener('click', async () => {
 
 $('loginClose').addEventListener('click', () => closeLoginModal(true));
 $('loginBackdrop').addEventListener('click', () => closeLoginModal(true));
-$('profileClose').addEventListener('click', closeProfileModal);
-$('profileBackdrop').addEventListener('click', closeProfileModal);
-$('profileLogout').addEventListener('click', async () => {
-    await LogoutQZhua();
-    closeProfileModal();
+$('accountLogoutBtn').addEventListener('click', async () => {
+    const btn = $('accountLogoutBtn');
+    if (!qzhuaLoggedIn || btn.disabled) return;
+    btn.disabled = true;
+    try {
+        await LogoutQZhua();
+        $('accountLoginBtn').focus();
+    } catch (err) {
+        $('accSubtitle').textContent = '退出失败，请重试';
+        appendLog('prefer', 'err', '退出登录失败：' + err);
+    } finally {
+        btn.disabled = false;
+    }
 });
 
 $('loginRegister').addEventListener('click', (e) => {
@@ -328,7 +424,7 @@ const logTime = () => {
     return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 };
 const logSourceLabel = (source) => (source === 'prefer' ? '延迟' : '带宽');
-const logLevelTag = (level) => (level === 'ok' ? 'OK' : level === 'err' ? 'ERR' : level === 'warn' ? 'WARN' : 'INFO');
+const logLevelTag = (level) => (level === 'ok' ? '成功' : level === 'err' ? '报错' : level === 'warn' ? '警告' : '信息');
 
 const updateLogCounts = () => {
     const ok = runLogs.filter((x) => x.level === 'ok').length;
@@ -358,8 +454,8 @@ const renderLogs = () => {
     list.innerHTML = rows.map((x) => `
         <div class="log-line">
             <span class="log-time">${x.time}</span>
-            <span class="log-source ${x.source}">${logSourceLabel(x.source)}</span>
-            <span class="log-tag ${x.level}">${logLevelTag(x.level)}</span>
+            <span class="log-source">[${logSourceLabel(x.source)}]</span>
+            <span class="log-tag">[${logLevelTag(x.level)}]</span>
             <span class="log-msg"></span>
         </div>`).join('');
     // 消息用 textContent 写入，避免节点名等文本注入 HTML
@@ -447,8 +543,19 @@ $('logExportBtn')?.addEventListener('click', async () => {
     }
 });
 let speedPaused = false;
-const speedSamples = [];
-let lastSpeedSampleSecond = -1;
+let speedMeasuring = false;
+let speedSamples = [];
+const nodeSpeedState = new Map();
+let detailNodeId = null;
+const activeSpeedNodes = new Set();
+const completedSpeedNodes = new Set();
+
+function followActiveSpeedNode() {
+    if ($('bandwidthDetail').classList.contains('hidden')) return;
+    if (detailNodeId !== null && !completedSpeedNodes.has(detailNodeId)) return;
+    const next = activeSpeedNodes.values().next().value;
+    if (next !== undefined) showBandwidthDetail(nodes.find((node) => String(node.id) === next), false);
+}
 let bandwidthRunning = false;
 let speedStarting = false; // 已点击“开始测试”、请求尚未返回，挡住连点
 const formatSpeed = (value) => Number(value || 0).toFixed(1);
@@ -577,48 +684,60 @@ function updateBandwidthRunUI() {
     if (!btn) return;
     if (speedRunning) {
         btn.disabled = false;
-        btn.textContent = speedPaused ? '继续' : '暂停';
+        setTestButtonState(btn, speedPaused ? '继续' : '暂停', !speedPaused && !speedMeasuring, !speedPaused && speedMeasuring);
         btn.title = speedPaused ? '继续打流' : '暂停打流（总时长会顺延）';
         btn.classList.toggle('speed-resume', speedPaused);
         return;
     }
     btn.classList.remove('speed-resume');
     const ready = nodes.length > 0 && selected.size > 0;
-    btn.disabled = !ready;
-    btn.textContent = '开始测速';
-    btn.title = !nodes.length ? '请先刷新加载节点' : (selected.size === 0 ? '请先选择至少一个节点' : '');
+    btn.disabled = !ready || frpcCacheBusy || speedStarting;
+    setTestButtonState(btn, '开始测速', false);
+    btn.title = frpcCacheBusy ? '请等待 frpc 管理完成' : (!nodes.length ? '请先刷新加载节点' : (selected.size === 0 ? '请先选择至少一个节点' : ''));
 }
 
 const setSpeedRunning = (running) => {
     speedRunning = running;
     bandwidthRunning = running;
-    if (!running) speedPaused = false;
+    if (!running) {
+        speedPaused = false;
+        speedMeasuring = false;
+    }
     $('speedBtn').classList.remove('hidden');
     $('speedCancelBtn').classList.toggle('hidden', !running);
     updateBandwidthRunUI();
     updateExportUI();
 };
 EventsOn('speed', (ev) => {
+    if (!speedMeasuring && speedRunning) {
+        speedMeasuring = true;
+        updateBandwidthRunUI();
+    }
+    const key = String(ev.nodeId);
+    activeSpeedNodes.add(key);
+    let state = nodeSpeedState.get(key);
+    if (!state) {
+        state = { samples: [], lastSecond: -1, down: null, up: null };
+        nodeSpeedState.set(key, state);
+    }
     const sampleSecond = Math.floor(ev.elapsed);
-    if (ev.nodeName && $('currentSpeedNode')) {
-        $('currentSpeedNode').textContent = ev.nodeCount > 1 && ev.nodeIndex
-            ? `${ev.nodeName}（${ev.nodeIndex}/${ev.nodeCount}）`
-            : ev.nodeName;
-    }
-    const shouldDrawSample = sampleSecond > lastSpeedSampleSecond;
+    const shouldDrawSample = sampleSecond > state.lastSecond;
     if (shouldDrawSample) {
-        speedSamples.push({ up: ev.up, down: ev.down, t: sampleSecond, phase: ev.phase });
-        if (speedSamples.length > 60) speedSamples.shift();
-        lastSpeedSampleSecond = sampleSecond;
+        state.samples.push({ up: ev.up, down: ev.down, t: sampleSecond, phase: ev.phase });
+        if (state.samples.length > 60) state.samples.shift();
+        state.lastSecond = sampleSecond;
     }
+    state.tick = ev;
+    if (ev.phase !== 'UP') state.down = ev.down;
+    if (ev.phase !== 'DN') state.up = ev.up;
+    followActiveSpeedNode();
+    if (key !== detailNodeId) return;
+    speedSamples = state.samples;
     // 分时测量：当前阶段只测一个方向，另一方向没有数据，别把面板数字刷成 0
     if (ev.phase !== 'UP' && $('speedDown')) $('speedDown').innerHTML = `${formatSpeed(ev.down)}<em> Mbps</em>`;
     if (ev.phase !== 'DN' && $('speedUp')) $('speedUp').innerHTML = `${formatSpeed(ev.up)}<em> Mbps</em>`;
     if (ev.phase !== 'UP' && $('detailDown')) $('detailDown').textContent = `${formatSpeed(ev.down)} Mbps`;
     if (ev.phase !== 'DN' && $('detailUp')) $('detailUp').textContent = `${formatSpeed(ev.up)} Mbps`;
-    if ($('speedProgress')) $('speedProgress').innerHTML = `${Math.round(ev.progress * 100)}<em>%</em>`;
-    $('bandwidthProgressFill').style.width = `${Math.round(ev.progress * 100)}%`;
-    if ($('bandwidthProgressFill')) $('bandwidthProgressFill').style.width = `${Math.round(ev.progress * 100)}%`;
     if ($('speedElapsed')) {
         // 分时测量：先下行再上行，把当前方向标出来，用户才知道曲线为什么一半是 0
         const dir = ev.phase === 'DN' ? '下行 ' : (ev.phase === 'UP' ? '上行 ' : '');
@@ -626,21 +745,26 @@ EventsOn('speed', (ev) => {
     }
     if (shouldDrawSample) drawSpeedChart();
 });
+EventsOn('speedRunProgress', (ev) => {
+    const progress = Math.round(Math.min(1, Math.max(0, ev.progress || 0)) * 100);
+    if ($('speedProgress')) $('speedProgress').innerHTML = `${progress}<em>%</em>`;
+    $('bandwidthProgressFill').style.width = `${progress}%`;
+    $('currentSpeedNode').textContent = `运行中 ${ev.active} 个任务 · 已完成 ${ev.completed}/${ev.total}`;
+});
 EventsOn('speedLog', (ev) => {
     appendSpeedLog(ev.level || 'info', ev.msg || '');
-});
-EventsOn('speedDownload', (ev) => {
-    if ($('speedProgress')) $('speedProgress').innerHTML = `${Math.round((ev.progress || 0) * 100)}<em>%</em>`;
-    $('bandwidthProgressFill').style.width = `${Math.round((ev.progress || 0) * 100)}%`;
-    if ($('speedElapsed')) $('speedElapsed').textContent = '正在下载 frpc…';
 });
 // 单节点完成：把该节点结果写进卡片与排行榜（多节点串行时逐个落地）
 EventsOn('speedNodeDone', (ev) => {
     const key = String(ev.id);
+    activeSpeedNodes.delete(key);
+    completedSpeedNodes.add(key);
     setRing(key, 100);
     if (ev.error) {
         bandwidthResults.set(key, { ...(bandwidthResults.get(key) || {}), error: ev.error });
+        if (key === detailNodeId) showBandwidthDetail(nodes.find((node) => String(node.id) === key), false);
         buildBandwidthGroups();
+        followActiveSpeedNode();
         return;
     }
     bandwidthResults.set(key, {
@@ -653,21 +777,18 @@ EventsOn('speedNodeDone', (ev) => {
         error: '',
     });
     if (key !== '__last__') bandwidthResults.delete('__last__');
+    if (key === detailNodeId) showBandwidthDetail(nodes.find((node) => String(node.id) === key), false);
     buildBandwidthGroups();
     renderBandwidthLeaderboard();
     $('bandwidthLeaderboard')?.classList.remove('hidden');
+    followActiveSpeedNode();
 });
 EventsOn('speedDone', (ev) => {
     setSpeedRunning(false);
     if ($('speedDown')) $('speedDown').innerHTML = `${formatSpeed(ev.downAvg)}<em> Mbps</em>`;
     if ($('speedUp')) $('speedUp').innerHTML = `${formatSpeed(ev.upAvg)}<em> Mbps</em>`;
-    if ($('detailDown')) $('detailDown').textContent = `${formatSpeed(ev.downAvg)} Mbps`;
-    if ($('detailUp')) $('detailUp').textContent = `${formatSpeed(ev.upAvg)} Mbps`;
-    if ($('detailAverage')) $('detailAverage').textContent = `${formatSpeed((ev.downAvg + ev.upAvg) / 2)} Mbps`;
-    if ($('detailDuration')) $('detailDuration').textContent = settings.testSeconds + ' 秒';
     if ($('speedProgress')) $('speedProgress').innerHTML = `${ev.cancelled ? '已停止' : '完成'}`;
     $('bandwidthProgressFill').style.width = ev.cancelled ? '0%' : '100%';
-    $('speedElapsed').textContent = ev.cancelled ? '测速已停止' : '测速完成';
     $('currentSpeedNode').textContent = ev.cancelled ? '已停止' : '已完成';
     // 单节点结果由 speedNodeDone 落地，这里只负责整轮收尾
     if (ev.cancelled) $('bandwidthLeaderboard')?.classList.add('hidden');
@@ -689,20 +810,21 @@ EventsOn('speedNeedLogin', () => {
     openLoginModal();
 });
 const startSpeedRun = async () => {
-    speedSamples.length = 0;
-    lastSpeedSampleSecond = -1;
+    activeSpeedNodes.clear();
+    completedSpeedNodes.clear();
+    for (const id of selected) {
+        nodeSpeedState.delete(String(id));
+        bandwidthResults.delete(String(id));
+    }
+    speedSamples = [];
     drawSpeedChart();
     resetRings();
     $('bandwidthLeaderboard')?.classList.add('hidden');
     if ($('speedDown')) $('speedDown').innerHTML = '--<em> Mbps</em>';
     if ($('speedUp')) $('speedUp').innerHTML = '--<em> Mbps</em>';
-    if ($('detailDown')) $('detailDown').textContent = '--';
-    if ($('detailUp')) $('detailUp').textContent = '--';
-    if ($('detailAverage')) $('detailAverage').textContent = '--';
-    if ($('detailDuration')) $('detailDuration').textContent = '--';
+    if (detailNodeId !== null) showBandwidthDetail(nodes.find((node) => String(node.id) === detailNodeId), false);
     if ($('speedProgress')) $('speedProgress').innerHTML = '0<em>%</em>';
     $('bandwidthProgressFill').style.width = '0%';
-    $('speedElapsed').textContent = '正在连接';
     const currentNode = nodes.find((node) => selected.has(String(node.id)));
     $('currentSpeedNode').textContent = currentNode?.name || '当前测速任务';
     const targetLabel = selected.size === 1 && currentNode ? currentNode.name : `已选 ${selected.size} 个节点`;
@@ -720,6 +842,7 @@ const startSpeedRun = async () => {
     }
 };
 $('speedBtn').addEventListener('click', async () => {
+    if (frpcCacheBusy || speedStarting) return;
     if (speedRunning) {
         speedPaused = !speedPaused;
         if (speedPaused) await PauseSpeedTest();
@@ -747,26 +870,55 @@ $('speedBtn').addEventListener('click', async () => {
         updateBandwidthRunUI();
         return;
     }
+    if (await checkFrpcBeforeSpeed()) showSpeedTask();
+});
+
+async function checkFrpcBeforeSpeed() {
+    if (speedStarting || speedRunning || frpcCacheBusy) return false;
+    speedStarting = true;
+    updateBandwidthRunUI();
+    try {
+        if (await IsFrpcReady()) return true;
+        $('speedTaskModal').classList.add('hidden');
+        $('frpcDownloadStatus').textContent = '下载期间不会开始测速。';
+        $('frpcDownloadProgress').value = 0;
+        $('frpcDownloadProgress').classList.add('hidden');
+        $('frpcDownloadModal').classList.remove('hidden');
+        return false;
+    } catch (err) {
+        $('currentSpeedNode').textContent = '组件检查失败，请重试';
+        appendSpeedLog('err', '检查 frpc 失败：' + err);
+        return false;
+    } finally {
+        speedStarting = false;
+        updateBandwidthRunUI();
+    }
+}
+
+function showSpeedTask() {
     // 静态确认弹窗：只显示一次性的任务信息，测速过程中不刷新
     const count = selected.size;
     $('taskNodeCount').textContent = String(count);
     $('taskSecs').textContent = String(settings.testSeconds);
     $('taskParallel').textContent = String(settings.bwParallel);
     // 每节点还要建隧道 + 起 frpc（约 5~10 秒），预估时长按“单节点时长 + 10 秒”算
-    $('taskEta').textContent = `约 ${count * (settings.testSeconds + 10)} 秒`;
+    $('taskTunnelConcurrency').textContent = `${settings.bwTunnelConcurrency}（期望）`;
+    $('taskEta').textContent = `约 ${Math.ceil(count / settings.bwTunnelConcurrency) * (settings.testSeconds + 10)} 秒`;
     $('speedTaskModal').classList.remove('hidden');
-});
-$('taskStartBtn').addEventListener('click', () => {
+}
+$('taskStartBtn').addEventListener('click', async () => {
     // 连点会触发两轮并发测速，后端虽有兜底，前端也不该把请求发出去
-    if (speedStarting || speedRunning) return;
+    if (speedStarting || speedRunning || frpcCacheBusy) return;
     if (selected.size === 0) {
         $('speedTaskModal').classList.add('hidden');
         appendSpeedLog('warn', '请先选择至少一个节点');
         updateBandwidthRunUI();
         return;
     }
-    $('speedTaskModal').classList.add('hidden');
-    startSpeedRun();
+    if (await checkFrpcBeforeSpeed()) {
+        $('speedTaskModal').classList.add('hidden');
+        startSpeedRun();
+    }
 });
 $('speedCancelBtn').addEventListener('click', async () => {
     appendSpeedLog('warn', '用户点击停止测速');
@@ -788,8 +940,12 @@ EventsOn('speedNode', (ev) => {
 });
 
 EventsOn('speedNodeProgress', (ev) => {
-    setRing(String(ev.id), ev.progress * 100);
-    if (ev.name) $('currentSpeedNode').textContent = ev.name;
+    const key = String(ev.id);
+    setRing(key, ev.progress * 100);
+    if (ev.progress < 1 && !completedSpeedNodes.has(key)) {
+        activeSpeedNodes.add(key);
+        followActiveSpeedNode();
+    }
 });
 
 const titlebar = $('titlebar');
@@ -1048,14 +1204,25 @@ function buildBandwidthGroups() {
     updateExportUI();
 }
 
-function showBandwidthDetail(node) {
-    const result = bandwidthResults.get(String(node.id)) ?? bandwidthResults.get('__last__');
-    $('bandwidthDetail').classList.remove('hidden');
+function showBandwidthDetail(node, open = true) {
+    if (!node) return;
+    detailNodeId = String(node.id);
+    const result = bandwidthResults.get(detailNodeId);
+    const state = nodeSpeedState.get(detailNodeId);
+    speedSamples = state?.samples || [];
+    if (open) $('bandwidthDetail').classList.remove('hidden');
     $('detailNodeName').textContent = node.name;
     $('detailDown').textContent = result?.down ? `${result.down} Mbps` : '--';
     $('detailUp').textContent = result?.up ? `${result.up} Mbps` : '--';
     $('detailAverage').textContent = result?.average ? `${result.average} Mbps` : '--';
     $('detailDuration').textContent = result?.duration ? `${result.duration} 秒` : '--';
+    if (!result?.down && state?.down != null) $('detailDown').textContent = `${formatSpeed(state.down)} Mbps`;
+    if (!result?.up && state?.up != null) $('detailUp').textContent = `${formatSpeed(state.up)} Mbps`;
+    const tick = state?.tick;
+    $('speedElapsed').textContent = result?.error ? `测速失败：${result.error}`
+        : result?.duration ? '节点测速完成'
+        : tick ? `${tick.phase === 'DN' ? '下行 ' : tick.phase === 'UP' ? '上行 ' : ''}${tick.elapsed.toFixed(1)} / ${tick.total.toFixed(0)} 秒` : '等待节点测速';
+    drawSpeedChart();
 }
 
 function showPreferDetail(node) {
@@ -1268,9 +1435,9 @@ $('bandwidthSelectAllBtn').addEventListener('click', () => {
 let preferRunning = false;
 let preferTotal = 0;
 
-function setPreferBtn(running) {
+function setPreferBtn(running, loading = false) {
     const btn = $('preferBtn');
-    btn.textContent = running ? '测速中…' : '开始测速';
+    setTestButtonState(btn, running ? (loading ? '准备中…' : '测速中…') : '开始测速', running && loading, running && !loading);
     btn.disabled = running;
     btn.classList.remove('speed-resume');
     $('preferCancelBtn').classList.toggle('hidden', !running);
@@ -1421,11 +1588,17 @@ $('preferBtn').addEventListener('click', async () => {
         return;
     }
     if (!nodes.length) return;
+    preferRunning = true;
+    setPreferBtn(true, true);
+    $('refreshBtn').disabled = true;
+    $('preferStatus').textContent = '准备测速';
     appendLog('prefer', 'info', selected.size ? `准备测速已选 ${selected.size} 个节点` : '准备测速全部节点');
     try {
         await StartPrefer(selected.size ? [...selected].map(Number) : []);
     } catch (err) {
+        preferRunning = false;
         setPreferBtn(false);
+        $('refreshBtn').disabled = false;
         $('preferStatus').textContent = '测速启动失败';
         appendLog('prefer', 'err', '启动延迟测速失败：' + err);
     }

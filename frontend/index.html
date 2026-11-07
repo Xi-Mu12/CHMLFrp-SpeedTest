@@ -31,7 +31,7 @@
             <button class="nav-item" data-view="logs" title="运行日志"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span>运行日志</span></button>
             <button class="nav-item" data-view="settings" title="设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></span><span>设置</span></button>
         </nav>
-        <div class="side-account" id="sideAccount" role="button"><span class="acc-icon"><svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg><img id="accAvatar" class="acc-avatar" alt=""/></span><span class="acc-text"><b id="accTitle">未登录</b><small id="accSubtitle">点击登录</small></span></div>
+        <div class="side-account" id="sideAccount"><button id="accountLoginBtn" class="account-login" type="button"><span class="acc-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg><img id="accAvatar" class="acc-avatar" alt=""/></span><span class="acc-text"><b id="accTitle">未登录</b><small id="accSubtitle">点击登录</small></span></button><button id="accountLogoutBtn" class="account-logout" type="button" title="退出登录" aria-label="退出登录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4"/><path d="M9 12h12m-5-5 5 5-5 5"/></svg></button></div>
     </aside>
 
     <main class="content">
@@ -74,6 +74,29 @@
             <div id="bandwidthDetail" class="bandwidth-modal hidden"><div class="bandwidth-modal-backdrop"></div><div class="bandwidth-modal-card"><div class="modal-titlebar"><span>节点测速详情 · <b id="detailNodeName">未选择节点</b></span><button id="closeBandwidthDetail" class="modal-close" title="关闭">×</button></div><div class="detail-grid"><div><span>下载速度</span><b id="detailDown">--</b></div><div><span>上传速度</span><b id="detailUp">--</b></div><div><span>平均速度</span><b id="detailAverage">--</b></div><div><span>测试时长</span><b id="detailDuration">--</b></div></div><div class="speed-chart"><div class="chart-head"><b>实时上下行速率（每秒）</b><span class="chart-legend"><i class="legend-dot legend-down"></i>下载 <i class="legend-dot legend-up"></i>上传 <span id="speedElapsed">等待开始</span></span></div><div class="chart-area" id="speedChart"><div class="chart-grid"></div><div class="chart-empty">点击测速后显示实时曲线</div></div></div></div></div>
             <div id="speedTaskModal" class="bandwidth-modal hidden"><div class="bandwidth-modal-backdrop"></div><div class="bandwidth-modal-card batch-card"><div class="modal-titlebar"><span>批量测速</span><button id="closeSpeedTask" class="modal-close" title="关闭">×</button></div><div class="batch-body"><p class="batch-count">共 <b id="taskNodeCount">--</b> 个节点</p><div class="batch-options"><div class="batch-row"><span>节点并发</span><b>1（串行，逐个节点测速）</b></div><div class="batch-row"><span>单次测速时长</span><b><span id="taskSecs">10</span> 秒 / 节点</b></div><div class="batch-row"><span>单方向连接数</span><b><span id="taskParallel">6</span> 条</b></div><div class="batch-row"><span>预计总耗时</span><b id="taskEta">--</b></div></div><div class="batch-note"><b>ℹ 测试说明</b><ul><li>将对已选节点逐个进行延迟与上下行带宽测速</li><li>测速过程中可随时点击“停止测速”中止</li><li>测速结果完成后可在页面上方导出 CSV / 图片</li></ul></div></div><div class="task-actions"><button id="taskCloseBtn" class="btn secondary">关闭</button><button id="taskStartBtn" class="btn primary">开始测试</button></div></div></div>
         </section>
+
+        <div id="frpcDownloadModal" class="bandwidth-modal hidden" role="dialog" aria-modal="true" aria-labelledby="frpcDownloadTitle">
+            <div id="frpcDownloadBackdrop" class="bandwidth-modal-backdrop"></div>
+            <div class="bandwidth-modal-card frpc-download-card">
+                <div class="modal-titlebar"><span id="frpcDownloadTitle">下载测速组件</span><button id="closeFrpcDownload" class="modal-close" aria-label="关闭">×</button></div>
+                <p class="frpc-download-description">带宽测速需要 frpc 组件，当前尚未下载或文件已不可用。是否从官方下载？下载完成后可继续确认测速任务。</p>
+                <p id="frpcDownloadStatus" class="frpc-download-status" role="status" aria-live="polite">下载期间不会开始测速。</p>
+                <progress id="frpcDownloadProgress" class="frpc-download-progress hidden" max="1" value="0" aria-label="frpc 下载进度"></progress>
+                <div class="task-actions"><button id="cancelFrpcDownload" class="btn secondary">取消</button><button id="confirmFrpcDownload" class="btn primary">下载 frpc</button></div>
+            </div>
+        </div>
+
+        <div id="frpcSecurityModal" class="bandwidth-modal hidden" role="dialog" aria-modal="true" aria-labelledby="frpcSecurityTitle">
+            <div class="bandwidth-modal-backdrop"></div>
+            <div class="bandwidth-modal-card frpc-download-card">
+                <div class="modal-titlebar"><span id="frpcSecurityTitle">frpc 文件访问受阻</span></div>
+                <p id="frpcSecurityMessage" class="frpc-download-description"></p>
+                <p class="frpc-download-status">组件路径（下载时临时文件为该路径加 .part）：</p>
+                <p id="frpcSecurityPath" class="frpc-download-status"></p>
+                <p class="frpc-download-description">打开 Windows 安全中心后，进入“病毒和威胁防护 → 保护历史记录”核对文件和检测详情。确认组件来自官方渠道；如怀疑误报，可向 Microsoft 提交文件分析。请保持安全防护开启。</p>
+                <div class="task-actions"><button id="frpcSecuritySubmit" class="btn secondary" type="button">提交误报分析</button><button id="frpcSecuritySettings" class="btn secondary" type="button">打开设置</button><button id="frpcSecurityOK" class="btn primary" type="button">确定</button></div>
+            </div>
+        </div>
 
         <section id="view-tools" class="view">
             <header class="compact-head"><div><h1>本机 IP</h1><p>本机网卡地址与当前公网 IP 信息</p></div><div class="compact-stats"><span>IPv4 <b id="toolIpv4Count">--</b></span><span>IPv6 <b id="toolIpv6Count">--</b></span><span id="toolQueryState">获取中…</span></div><div class="toolbar"><button id="toolsRefreshBtn" class="tool-btn" type="button"><span>↻</span>全部刷新</button></div></header>
@@ -120,7 +143,7 @@
             </div>
         </div>
 
-        <div id="closeAskModal" class="bandwidth-modal hidden"><div class="bandwidth-modal-backdrop" id="closeAskBackdrop"></div><div class="bandwidth-modal-card close-ask-card"><div class="close-ask-head"><b>关闭窗口</b><small>您希望关闭窗口后应用如何运行？</small></div><div class="close-ask-options"><button id="closeAskTray" class="close-ask-option" type="button"><span class="close-ask-icon"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M9 20h6"/></svg></span><span class="close-ask-text"><b>最小化到系统托盘</b><small>应用将在后台运行，可以从系统托盘重新打开窗口</small></span></button><button id="closeAskExit" class="close-ask-option danger" type="button"><span class="close-ask-icon"><svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></span><span class="close-ask-text"><b>退出应用</b><small>完全关闭应用程序，停止所有后台任务</small></span></button></div><p class="close-ask-note">选择「最小化到系统托盘」后将记住您的选择，不再询问<br/>您可以在设置中修改此行为</p></div></div>
+        <div id="closeAskModal" class="bandwidth-modal hidden" role="dialog" aria-modal="true" aria-labelledby="closeAskTitle" aria-describedby="closeAskDescription"><div class="bandwidth-modal-backdrop" id="closeAskBackdrop"></div><div class="bandwidth-modal-card close-ask-card"><button id="closeAskDismiss" class="close-ask-dismiss" type="button" title="关闭弹窗" aria-label="关闭弹窗">×</button><div class="close-ask-head"><b id="closeAskTitle">关闭窗口</b><small id="closeAskDescription">最小化后应用将在系统托盘中继续运行；退出将停止后台任务并关闭应用。</small></div><p class="close-ask-note">选择最小化后会记住此选择，可在设置中修改。</p><div class="close-ask-actions"><button id="closeAskTray" type="button">最小化</button><button id="closeAskExit" type="button">退出</button></div></div></div>
         <div id="loginModal" class="bandwidth-modal login-modal hidden">
             <div class="bandwidth-modal-backdrop" id="loginBackdrop"></div>
             <div class="bandwidth-modal-card login-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
@@ -141,42 +164,6 @@
                     <button id="loginCancelBtn" class="login-secondary">取消</button>
                     <div class="login-waiting"><i></i>等待授权完成...</div>
                 </div>
-            </div>
-        </div>
-        <div id="profileModal" class="bandwidth-modal profile-modal hidden">
-            <div class="bandwidth-modal-backdrop" id="profileBackdrop"></div>
-            <div class="bandwidth-modal-card profile-card" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
-                <button id="profileClose" class="login-close" title="关闭">×</button>
-                <div class="profile-head">
-                    <img id="profileAvatar" class="profile-avatar" alt="用户头像" />
-                    <div class="profile-title">
-                        <h2 id="profileTitle">已登录</h2>
-                        <p id="profileEmail" class="profile-email">—</p>
-                    </div>
-                </div>
-                <div id="profileApiState" class="profile-api-state"></div>
-                <section class="profile-section">
-                    <div class="profile-section-title">轻爪账户</div>
-                    <div class="profile-grid profile-grid-basic">
-                        <div><span>用户标识</span><b id="profileSub">—</b></div>
-                        <div><span>昵称</span><b id="profileNickname">—</b></div>
-                    </div>
-                </section>
-                <section id="chmlProfileSection" class="profile-section hidden">
-                    <div class="profile-section-title">CHMLFrp 账户</div>
-                    <div class="profile-grid">
-                        <div><span>用户组</span><b id="profileUserGroup">—</b></div>
-                        <div><span>带宽限制</span><b id="profileBandwidth">—</b></div>
-                        <div><span>隧道数量</span><b id="profileTunnel">—</b></div>
-                        <div><span>当前连接</span><b id="profileConnections">—</b></div>
-                        <div><span>累计上传</span><b id="profileUpload">—</b></div>
-                        <div><span>累计下载</span><b id="profileDownload">—</b></div>
-                        <div><span>积分</span><b id="profileIntegral">—</b></div>
-                        <div><span>实名状态</span><b id="profileRealname">—</b></div>
-                        <div><span>用户组到期</span><b id="profileTerm">—</b></div>
-                    </div>
-                </section>
-                <button id="profileLogout" class="login-secondary profile-logout">退出登录</button>
             </div>
         </div>
     </main>

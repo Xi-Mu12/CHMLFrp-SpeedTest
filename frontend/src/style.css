@@ -476,26 +476,13 @@
 .log-line{display:flex;gap:10px;align-items:baseline;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.03)}
 .log-line:last-child{border-bottom:0}
 .log-time{color:var(--dim);flex:0 0 auto;font-size:10.5px;font-variant-numeric:tabular-nums}
-.log-source{flex:0 0 auto;min-width:38px;text-align:center;padding:0 6px;border-radius:3px;font-size:9.5px;font-weight:600;letter-spacing:.3px}
-.log-source.prefer{background:rgba(246,130,31,.16);color:#f6a04a}
-.log-source.bandwidth{background:rgba(86,150,255,.16);color:#7bb3ff}
-.log-tag{flex:0 0 auto;min-width:34px;text-align:center;padding:0 5px;border-radius:3px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
-.log-tag.info{background:rgba(140,150,165,.14);color:#a9b3c1}
-.log-tag.ok{background:rgba(45,180,95,.18);color:#6fd49a}
-.log-tag.warn{background:rgba(246,130,31,.18);color:#f6a04a}
-.log-tag.err{background:rgba(239,107,107,.18);color:#ff9b9b}
+.log-source,.log-tag{flex:0 0 auto;color:var(--muted);font-size:inherit;font-weight:400;white-space:nowrap}
 .log-msg{flex:1 1 auto;min-width:0;color:var(--text);word-break:break-word}
 .log-autoscroll{display:flex;align-items:center;gap:6px;margin-left:10px;font-size:11px;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap}
 .log-autoscroll input{accent-color:var(--orange);cursor:pointer}
 :root[data-theme="light"] .log-list{background:#ffffff;border-color:#e5e7eb}
 :root[data-theme="light"] .log-list::-webkit-scrollbar-thumb{background:#e5e7eb}
 :root[data-theme="light"] .log-line{border-color:rgba(0,0,0,.04)}
-:root[data-theme="light"] .log-source.prefer{background:rgba(220,110,20,.12);color:#c46a14}
-:root[data-theme="light"] .log-source.bandwidth{background:rgba(28,80,180,.10);color:#2a5cc7}
-:root[data-theme="light"] .log-tag.info{background:rgba(90,100,115,.10);color:#5a6473}
-:root[data-theme="light"] .log-tag.ok{background:rgba(20,140,70,.12);color:#1f9d63}
-:root[data-theme="light"] .log-tag.warn{background:rgba(220,110,20,.14);color:#c46a14}
-:root[data-theme="light"] .log-tag.err{background:rgba(200,50,50,.12);color:#c43838}
 
 /* ---------- 本机 IP：地址枚举 + 归属地查询 ---------- */
 .tools-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:13px;align-items:start}
@@ -572,32 +559,44 @@
 
 /* ---------- 关闭窗口询问弹窗 ---------- */
 #closeAskModal{left:0;padding:0;z-index:300}
-#closeAskModal .close-ask-card{width:min(440px,calc(100vw - 54px));padding:35px 27px;background:var(--panel);border:1px solid #3a414b;border-radius:12px;box-shadow:0 24px 70px rgba(0,0,0,.5)}
-.close-ask-head{display:flex;flex-direction:column;gap:5px;margin-bottom:18px}
+#closeAskModal .close-ask-card{width:min(520px,calc(100vw - 40px));padding:28px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 24px 70px rgba(0,0,0,.5)}
+.close-ask-head{display:flex;flex-direction:column;gap:12px;padding-right:24px}
 .close-ask-head b{font-size:16px;color:var(--text)}
-.close-ask-head small{font-size:11.5px;color:var(--muted)}
-.close-ask-options{display:flex;flex-direction:column;gap:10px}
-.close-ask-option{display:flex;align-items:center;gap:13px;width:100%;padding:13px 15px;text-align:left;background:var(--panel2);border:1px solid var(--line);border-radius:9px;transition:border-color .15s,background .15s}
-.close-ask-option:hover{border-color:#4a5361;background:#35383F}
-.close-ask-option.danger:hover{border-color:rgba(217,75,75,.55)}
-.close-ask-icon{flex:0 0 36px;width:36px;height:36px;display:grid;place-items:center;border-radius:10px;background:var(--panel);color:#9aa3ad}
-.close-ask-icon svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.close-ask-option.danger .close-ask-icon{background:rgba(217,75,75,.14);color:#ef8080}
-.close-ask-text b{display:block;font-size:13px;font-weight:600;color:var(--text)}
-.close-ask-text small{display:block;margin-top:3px;font-size:10.5px;color:var(--dim);line-height:1.5}
-.close-ask-note{margin-top:16px;text-align:center;font-size:10.5px;color:var(--dim);line-height:1.7}
+.close-ask-head small{font-size:12px;color:var(--muted);line-height:1.8}
+.close-ask-note{margin-top:12px;font-size:11px;color:var(--dim);line-height:1.7}
+.close-ask-dismiss{position:absolute;right:12px;top:10px;display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:22px}
+.close-ask-dismiss:hover{color:var(--text);background:var(--line)}
+.close-ask-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:24px}
+.close-ask-actions button{min-width:88px;padding:9px 18px;border:1px solid #dfe2e7;border-radius:7px;background:#fff;color:#20242b;font-size:12px;font-weight:600;transition:background-color .15s,transform .15s}
+.close-ask-actions button:hover{background:#edf0f4}
+.close-ask-actions #closeAskTray{background:transparent;border-color:var(--line);color:var(--muted);font-weight:400}
+.close-ask-actions #closeAskTray:hover{background:var(--line);color:var(--text)}
+.close-ask-actions button:active{transform:translateY(1px)}
+.close-ask-card button:focus-visible{outline:2px solid var(--muted);outline-offset:3px}
+.close-ask-actions button:disabled{opacity:.5;cursor:wait}
 :root[data-theme="light"] #closeAskModal .close-ask-card{background:#ffffff;border-color:#e5e7eb;box-shadow:0 24px 70px rgba(30,45,70,.25)}
 :root[data-theme="light"] #closeAskModal .close-ask-head b{color:#1a1d22}
 :root[data-theme="light"] #closeAskModal .close-ask-head small{color:#6b7280}
-:root[data-theme="light"] #closeAskModal .close-ask-option{background:#f7f8fa;border-color:#e5e7eb}
-:root[data-theme="light"] #closeAskModal .close-ask-option:hover{background:#eef1f5;border-color:#c9d2dd}
-:root[data-theme="light"] #closeAskModal .close-ask-icon{background:#e8ebef;color:#5a6473}
-:root[data-theme="light"] #closeAskModal .close-ask-option.danger .close-ask-icon{background:#fdecec;color:#c43c3c}
-:root[data-theme="light"] #closeAskModal .close-ask-text b{color:#1a1d22}
-:root[data-theme="light"] #closeAskModal .close-ask-text small{color:#6b7280}
 :root[data-theme="light"] #closeAskModal .close-ask-note{color:#8a929c}
 
-/* ---------- 用户资料弹窗 ---------- */
+/* Keep hidden dialogs mounted for exit transitions without changing business state. */
+.bandwidth-modal{opacity:1;visibility:visible;transition:opacity .18s ease,visibility 0s}
+.bandwidth-modal.hidden{display:grid!important;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .18s ease,visibility 0s .18s}
+.bandwidth-modal .bandwidth-modal-card{transform:translateY(0) scale(1);transition:transform .18s cubic-bezier(.2,.7,.2,1)}
+.bandwidth-modal.hidden .bandwidth-modal-card{transform:translateY(10px) scale(.98)}
+@media(prefers-reduced-motion:reduce){.bandwidth-modal,.bandwidth-modal.hidden,.bandwidth-modal .bandwidth-modal-card{transition:none}.bandwidth-modal.hidden .bandwidth-modal-card{transform:none}}
+
+/* ---------- 侧栏账户 ---------- */
+.side-account .account-login{display:flex;align-items:center;gap:11px;flex:1;min-width:0;border:0;background:transparent;color:inherit;text-align:left;padding:0}
+.side-account .account-login .acc-text{min-width:0;flex:1}
+.side-account .account-login .acc-text b,.side-account .account-login .acc-text small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side-account.logged-in,.side-account.logged-in .account-login{cursor:default}
+.side-account .account-logout{display:none;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;padding:6px;border:0;border-radius:6px;background:transparent;color:var(--muted)}
+.side-account.logged-in .account-logout{display:flex}
+.side-account .account-logout:hover{color:var(--text)}
+.side-account .account-logout:disabled{opacity:.5;cursor:wait}
+.side-account button:focus-visible{outline:2px solid var(--muted);outline-offset:2px}
+.side-account .account-logout svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .side-account .acc-avatar{display:none;width:100%;height:100%;object-fit:cover;border-radius:inherit}
 .side-account.logged-in .acc-icon svg{display:none}
 .side-account.logged-in .acc-avatar{display:block}
@@ -643,3 +642,35 @@
 /* 带宽排行榜的排序维度切换（复用 .filter 的外观，只调间距） */
 .leaderboard-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 .rank-dims{display:inline-flex;align-items:center;gap:5px}
+.frpc-cache-row{flex-wrap:wrap}
+.frpc-cache-row .setting-text{flex:1 1 260px}
+.frpc-cache-actions{display:flex;gap:8px;flex-wrap:wrap}
+.frpc-cache-feedback{padding:0 18px 14px;color:var(--muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.frpc-cache-feedback progress{display:block;width:100%;height:6px;margin-top:10px;accent-color:var(--text)}
+.frpc-cache-feedback progress.hidden{display:none}
+.frpc-download-card{max-width:480px}
+.frpc-download-description{margin:18px 0 12px;color:var(--muted);font-size:13px;line-height:1.8}
+.frpc-download-status{color:var(--muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.frpc-download-progress{display:block;width:100%;height:6px;margin-top:16px;accent-color:var(--text)}
+.frpc-download-progress.hidden{display:none}
+.frpc-download-card .task-actions{margin:20px 0 0}
+
+/* Keep the button width stable while its icon switches to a loading ring. */
+.test-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:116px}
+.test-button-icon{position:relative;display:inline-grid;place-items:center;width:18px;height:18px;flex:0 0 18px}
+.test-button-icon svg{position:absolute;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.test-button-bolt{width:18px;height:18px;transition:width .2s ease,height .2s ease}
+.test-button-ring{width:24px;height:24px;opacity:0;transition:opacity .2s ease;transform:rotate(-90deg)}
+.test-button-ring circle{stroke-dasharray:45 18}
+.test-button.is-loading .test-button-ring{opacity:1;animation:test-button-spin .9s linear infinite}
+.test-button.is-loading .test-button-bolt{opacity:0}
+.test-button.is-testing .test-button-bolt{animation:test-button-float 1.2s ease-in-out infinite}
+.test-button.is-testing:disabled{opacity:1;cursor:wait}
+.test-button.is-loading:disabled{opacity:1;cursor:wait}
+#view-speed .prefer-actions #selectAllBtn,
+#view-speed .prefer-actions #preferBtn,
+#view-bandwidth .speed-actions #bandwidthSelectAllBtn,
+#view-bandwidth .speed-actions #speedBtn{height:34px;min-height:34px;padding-top:0;padding-bottom:0}
+@keyframes test-button-spin{from{transform:rotate(-90deg)}to{transform:rotate(270deg)}}
+@keyframes test-button-float{0%,100%{transform:translateY(1px)}50%{transform:translateY(-1px)}}
+@media(prefers-reduced-motion:reduce){.test-button-icon svg{animation:none!important;transition:none}}
