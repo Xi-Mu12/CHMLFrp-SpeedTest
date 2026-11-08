@@ -141,6 +141,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # body_path 是仓库内的相对路径，必须先把仓库取下来才读得到公告文件。
+      # 少了这一步，Release 会创建成功但正文为空（action 对缺失文件只警告不报错）。
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -159,6 +164,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: CHMLFrp 测速 ${{ github.ref_name }}
           files: dist/*.zip
           body_path: .github/release-notes/current.md
           draft: false
