@@ -52,6 +52,8 @@ export function ManageFrpcCache(arg1:boolean):Promise<string>;
 
 export function PauseSpeedTest():Promise<void>;
 
+export function PingMCServer(arg1:string,arg2:string):Promise<main.MCServerInfo>;
+
 export function PrepareFrpc():Promise<void>;
 
 export function QueryIPInfo(arg1:string):Promise<main.IPGeo>;

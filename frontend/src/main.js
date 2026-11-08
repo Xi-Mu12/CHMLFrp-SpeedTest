@@ -4,6 +4,7 @@ import { GetNodes, StartPrefer, CancelPrefer, SaveCSV, SaveImage, StartSpeedTest
 import { EventsOn, WindowMinimise, WindowToggleMaximise, WindowGetPosition, WindowSetPosition, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { StartQZhuaLogin, LogoutQZhua, CancelQZhuaLogin, RestoreSession, SetRememberLogin } from '../wailsjs/go/main/App';
 import { CheckForUpdate, StartUpdateDownload, CancelUpdateDownload, InstallUpdateAndRestart, SkipUpdateVersion, GetUpdatePrefs, GetUpdateState, SetAutoUpdateCheck } from '../wailsjs/go/main/App';
+import { PingMCServer } from '../wailsjs/go/main/App';
 
 const $ = (id) => document.getElementById(id);
 
@@ -66,6 +67,7 @@ document.querySelectorAll('.nav-item').forEach((btn) => {
         document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
         $('view-' + btn.dataset.view).classList.add('active');
         if (btn.dataset.view === 'tools') ensureToolsLoaded();
+        if (btn.dataset.view === 'mc') $('mcAddress').focus();
     });
 });
 
@@ -2407,3 +2409,222 @@ async function bootstrap() {
     await loadNodes();
 }
 bootstrap();
+
+// ---------- MC 服务器查询 ----------
+// Java 与基岩的 MOTD 统一由后端压平成 § 码文本，这里只负责把它渲染成带样式的行。
+const MC_COLORS = {
+    '0': '#000000', '1': '#0000aa', '2': '#00aa00', '3': '#00aaaa',
+    '4': '#aa0000', '5': '#aa00aa', '6': '#ffaa00', '7': '#aaaaaa',
+    '8': '#555555', '9': '#5555ff', 'a': '#55ff55', 'b': '#55ffff',
+    'c': '#ff5555', 'd': '#ff55ff', 'e': '#ffff55', 'f': '#ffffff',
+};
+let mcKind = 'java';
+let mcBusy = false;
+
+function renderMotd(box, raw) {
+    box.innerHTML = '';
+    const text = String(raw || '');
+    if (!text.trim()) {
+        const empty = document.createElement('div');
+        empty.className = 'mc-motd-line';
+        empty.textContent = '（服务器没有返回 MOTD）';
+        box.appendChild(empty);
+        return;
+    }
+    text.split('\n').forEach((line) => {
+        const row = document.createElement('div');
+        row.className = 'mc-motd-line';
+        const style = { color: '', bold: false, italic: false, underline: false, strike: false, obf: false };
+        let buf = '';
+        const flush = () => {
+            if (!buf) return;
+            const span = document.createElement('span');
+            span.textContent = buf;
+            if (style.color) span.style.color = style.color;
+            if (style.bold) span.style.fontWeight = '700';
+            if (style.italic) span.style.fontStyle = 'italic';
+            if (style.underline) span.style.textDecoration = 'underline';
+            if (style.strike) span.style.textDecoration = 'line-through';
+            if (style.obf) span.style.opacity = '0.6';
+            row.appendChild(span);
+            buf = '';
+        };
+        for (let i = 0; i < line.length; i += 1) {
+            const ch = line[i];
+            if (ch === '§' && i + 1 < line.length) {
+                const code = line[i + 1].toLowerCase();
+                flush();
+                if (MC_COLORS[code]) {
+                    // 颜色码在游戏里会顺带清掉粗体等格式
+                    Object.assign(style, { color: MC_COLORS[code], bold: false, italic: false, underline: false, strike: false, obf: false });
+                } else if (code === 'l') style.bold = true;
+                else if (code === 'o') style.italic = true;
+                else if (code === 'n') style.underline = true;
+                else if (code === 'm') style.strike = true;
+                else if (code === 'k') style.obf = true;
+                else if (code === 'r') Object.assign(style, { color: '', bold: false, italic: false, underline: false, strike: false, obf: false });
+                i += 1;
+                continue;
+            }
+            buf += ch;
+        }
+        flush();
+        box.appendChild(row);
+    });
+}
+
+function renderMC(info) {
+    const box = $('mcResult');
+    box.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'mc-card';
+    const head = document.createElement('div');
+    head.className = 'mc-card-head';
+
+    const icon = document.createElement('div');
+    icon.className = 'mc-icon';
+    if (info.favicon) {
+        const img = document.createElement('img');
+        img.src = info.favicon;
+        img.alt = '服务器图标';
+        icon.appendChild(img);
+    } else {
+        icon.textContent = info.kind === 'be' ? 'BE' : 'JE';
+    }
+    head.appendChild(icon);
+
+    const title = document.createElement('div');
+    title.className = 'mc-title';
+    const motd = document.createElement('div');
+    motd.className = 'mc-motd';
+    renderMotd(motd, info.motd);
+    title.appendChild(motd);
+
+    const sub = document.createElement('div');
+    sub.className = 'mc-sub';
+    const tag = document.createElement('span');
+    tag.className = info.kind === 'be' ? 'mc-tag be' : 'mc-tag';
+    tag.textContent = info.kind === 'be' ? '基岩版' : 'Java 版';
+    sub.appendChild(tag);
+    const addr = document.createElement('span');
+    addr.textContent = `${info.host}:${info.port}`;
+    sub.appendChild(addr);
+    const extras = [];
+    if (info.srv) extras.push('SRV 解析');
+    if (info.software) extras.push(info.software);
+    if (info.gameMode) extras.push(`模式 ${info.gameMode}`);
+    if (info.secureChat) extras.push('强制安全聊天');
+    if (extras.length) {
+        const tail = document.createElement('span');
+        tail.textContent = extras.join(' · ');
+        sub.appendChild(tail);
+    }
+    title.appendChild(sub);
+    head.appendChild(title);
+    card.appendChild(head);
+
+    const stats = document.createElement('div');
+    stats.className = 'mc-stats';
+    [
+        ['版本', info.version || '未知'],
+        ['在线人数', `${info.online} / ${info.max}`],
+        ['延迟', `${info.latencyMs} ms`],
+        ['协议号', info.protocol ? String(info.protocol) : '未知'],
+    ].forEach(([label, value]) => {
+        const cell = document.createElement('div');
+        cell.className = 'mc-stat';
+        const l = document.createElement('span');
+        l.textContent = label;
+        const v = document.createElement('b');
+        v.textContent = value;
+        cell.append(l, v);
+        stats.appendChild(cell);
+    });
+    card.appendChild(stats);
+
+    if (info.players && info.players.length) {
+        const players = document.createElement('div');
+        players.className = 'mc-players';
+        const cap = document.createElement('span');
+        cap.textContent = `在线玩家示例（${info.players.length}）`;
+        const list = document.createElement('div');
+        list.className = 'mc-player-list';
+        info.players.forEach((name) => {
+            const chip = document.createElement('span');
+            chip.className = 'mc-player';
+            chip.textContent = name;
+            list.appendChild(chip);
+        });
+        players.append(cap, list);
+        card.appendChild(players);
+    }
+
+    box.appendChild(card);
+}
+
+function renderMCError(message) {
+    const box = $('mcResult');
+    box.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'mc-error';
+    const title = document.createElement('b');
+    title.textContent = '查询失败';
+    const detail = document.createElement('small');
+    detail.textContent = message;
+    card.append(title, detail);
+    box.appendChild(card);
+}
+
+async function queryMC() {
+    if (mcBusy) return;
+    const address = ($('mcAddress').value || '').trim();
+    if (!address) {
+        $('mcQueryState').textContent = '请先填写地址';
+        $('mcAddress').focus();
+        return;
+    }
+    const btn = $('mcQueryBtn');
+    mcBusy = true;
+    btn.disabled = true;
+    btn.textContent = '查询中…';
+    $('mcQueryState').textContent = '正在查询…';
+    const started = Date.now();
+    try {
+        const info = await PingMCServer(address, mcKind);
+        renderMC(info);
+        $('mcQueryState').textContent = `查询完成 · ${Date.now() - started} ms`;
+        try {
+            localStorage.setItem('mcLast', JSON.stringify({ address, kind: mcKind }));
+        } catch (err) { /* 隐私模式下写不了，忽略 */ }
+    } catch (err) {
+        renderMCError(String(err));
+        $('mcQueryState').textContent = '查询失败';
+    } finally {
+        mcBusy = false;
+        btn.disabled = false;
+        btn.textContent = '查询';
+    }
+}
+
+if ($('mcForm')) {
+    // 回填上次查询的地址与类型
+    try {
+        const saved = JSON.parse(localStorage.getItem('mcLast') || 'null');
+        if (saved) {
+            if (saved.address) $('mcAddress').value = saved.address;
+            if (saved.kind === 'be') mcKind = 'be';
+        }
+    } catch (err) { /* 缓存损坏，忽略 */ }
+    document.querySelectorAll('#view-mc .mc-kind .filter').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.mcKind === mcKind);
+        btn.addEventListener('click', () => {
+            mcKind = btn.dataset.mcKind === 'be' ? 'be' : 'java';
+            document.querySelectorAll('#view-mc .mc-kind .filter').forEach((b) => b.classList.toggle('active', b === btn));
+            if (($('mcAddress').value || '').trim()) queryMC();
+        });
+    });
+    $('mcForm').addEventListener('submit', (event) => {
+        event.preventDefault();
+        queryMC();
+    });
+}

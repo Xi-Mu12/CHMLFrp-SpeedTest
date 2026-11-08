@@ -126,6 +126,50 @@ export namespace main {
 	        this.private = source["private"];
 	    }
 	}
+	export class MCServerInfo {
+	    kind: string;
+	    address: string;
+	    host: string;
+	    port: number;
+	    srv: boolean;
+	    motd: string;
+	    version: string;
+	    protocol: number;
+	    online: number;
+	    max: number;
+	    latencyMs: number;
+	    favicon: string;
+	    map?: string;
+	    gameMode?: string;
+	    software?: string;
+	    players?: string[];
+	    secureChat?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MCServerInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.address = source["address"];
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.srv = source["srv"];
+	        this.motd = source["motd"];
+	        this.version = source["version"];
+	        this.protocol = source["protocol"];
+	        this.online = source["online"];
+	        this.max = source["max"];
+	        this.latencyMs = source["latencyMs"];
+	        this.favicon = source["favicon"];
+	        this.map = source["map"];
+	        this.gameMode = source["gameMode"];
+	        this.software = source["software"];
+	        this.players = source["players"];
+	        this.secureChat = source["secureChat"];
+	    }
+	}
 	export class NodeItem {
 	    id: number;
 	    name: string;

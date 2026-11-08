@@ -102,6 +102,10 @@ export function PauseSpeedTest() {
   return window['go']['main']['App']['PauseSpeedTest']();
 }
 
+export function PingMCServer(arg1, arg2) {
+  return window['go']['main']['App']['PingMCServer'](arg1, arg2);
+}
+
 export function PrepareFrpc() {
   return window['go']['main']['App']['PrepareFrpc']();
 }
