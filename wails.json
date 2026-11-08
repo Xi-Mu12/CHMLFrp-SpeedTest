@@ -11,10 +11,10 @@
     "email": "ximu.setback@qq.com"
   },
   "info": {
-    "companyName": "XiMu",
+    "companyName": "Ximora",
     "productName": "CHMLFrp 测速",
-    "productVersion": "1.1.0",
-    "copyright": "Copyright 2026 XiMu",
+    "productVersion": "1.45.0",
+    "copyright": "Copyright 2026 Ximora",
     "comments": "CHMLFrp 节点带宽与延迟测速工具"
   }
 }
