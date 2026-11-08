@@ -148,7 +148,12 @@ git tag v1.2.0
 git push origin v1.2.0
 ```
 
-CI 会用 tag 注入 `-X main.version=v1.2.0` 并构建 `updater.exe`。**Release 的说明（body）就是客户端展示的更新公告**，建议按「新增 / 优化 / 修复」分段书写。
+CI 会用 tag 注入 `-X main.version=v1.2.0` 并构建 `updater.exe`。**Release 的说明（body）就是客户端展示的更新公告**，它取自 `.github/release-notes/current.md`：打 tag 前先改这个文件并提交，再把 tag 推上去。
+
+写公告时注意排版，前端是用 `textContent` 原样渲染的，不做 Markdown 解析：
+
+- 可用：空行分段、`·` 或 `-` 开头的行、「新增 / 优化 / 修复」这类纯文本小标题。
+- 不要用：`#` 标题、`**粗体**`、表格、引用块、代码块——这些语法会原样出现在更新弹窗里。
 
 > 注意：GitHub 在部分网络环境下直连不稳定。客户端会遵循系统代理设置（`HTTP(S)_PROXY`）；若目标用户普遍无代理，后续可考虑自有镜像或 CDN 转发，但下载源仍需固定，不能让客户端接受任意 URL。
 

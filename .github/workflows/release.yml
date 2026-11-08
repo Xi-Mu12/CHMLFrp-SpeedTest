@@ -152,12 +152,14 @@ jobs:
           find artifacts -name '*.zip' -exec cp {} dist/ \;
           ls -lh dist
 
-      # Release 的 body 就是客户端的更新公告，提交时请按
-      # 「新增 / 优化 / 修复」分段书写 tag 的发布说明。
+      # Release body 会原样展示在客户端的更新弹窗里（前端用 textContent 渲染，
+      # 不做 Markdown 解析），因此固定从 .github/release-notes/current.md 读取，
+      # 不用 generate_release_notes 自动生成的英文提交列表。
+      # 发版流程：先编辑该文件 → 提交 → 再打 tag。
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.zip
-          generate_release_notes: true
+          body_path: .github/release-notes/current.md
           draft: false
           prerelease: false
