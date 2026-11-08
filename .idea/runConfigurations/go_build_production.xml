@@ -1,0 +1,13 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="go build (production)" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="sharktest" />
+    <working_directory value="$PROJECT_DIR$" />
+    <parameters value="" />
+    <kind value="PACKAGE" />
+    <package value="." />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$" />
+    <go_parameters value="-tags desktop,production" />
+    <method v="2" />
+  </configuration>
+</component>

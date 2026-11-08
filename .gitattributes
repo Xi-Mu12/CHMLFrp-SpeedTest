@@ -1,0 +1,4 @@
+# 换行符：Windows 上 core.autocrlf=true 会在检出时把文本转成 CRLF，
+# 但 shell 脚本必须保持 LF，否则 bash 读到的 shebang 和每行尾部都带 \r，
+# 会报 "$'\r': command not found" 之类的错误。
+*.sh text eol=lf
