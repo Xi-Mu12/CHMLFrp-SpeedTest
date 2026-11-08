@@ -302,6 +302,9 @@
 #view-speed .node-card .prefer-detail-btn,#view-bandwidth .node-card .node-detail-btn{margin-top:auto}
 
 /* ---------- 设置：列表式分组 + 开关 ---------- */
+/* .view 底部内边距是 0，设置页滚到底时最后一张卡片会贴着窗口下沿被切掉，
+   这里单独补一段留白；测速页不加，它们的高度是按 100vh 精确算的。 */
+#view-settings{padding-bottom:48px}
 .settings-list{margin-top:34px;max-width:840px;display:flex;flex-direction:column;gap:26px}
 .settings-group-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;font-weight:600;color:var(--text)}
 .settings-group-head svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}

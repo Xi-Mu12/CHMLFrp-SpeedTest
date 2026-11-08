@@ -312,6 +312,9 @@ EventsOn('qzhuaAuth', (event) => {
             picture: event.picture,
         } });
         $('loginModal').classList.add('hidden');
+        // 未登录时带宽页会把「当前测速节点」写成「请先登录账号」，登录成功后必须复位，
+        // 否则这条提示会一直留在进度条上方，直到用户真正开始一次测速。
+        if (!speedRunning && $('currentSpeedNode')) $('currentSpeedNode').textContent = '未开始';
         // 登录成功：撤掉节点区的登录引导，并真正去拉节点（未登录期间不展示卡片）
         ensureLoginHint($('groups'));
         ensureLoginHint($('bandwidthGroups'));
