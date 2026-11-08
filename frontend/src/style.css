@@ -57,7 +57,7 @@
 .side-head{padding-bottom:32px}
 .sidebar.collapsed .side-head{padding-left:19px}
 .nav-icon svg{width:19px;height:19px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.nav-item:first-child .nav-icon svg{fill:currentColor;stroke:currentColor}
+.nav-icon svg.nav-fill{fill:currentColor;stroke:currentColor}
 .side-account{margin-top:auto;position:relative;min-height:42px;overflow:hidden}
 .side-account .avatar{flex:0 0 34px;width:34px;height:34px;border:1px solid #3b424c;font-size:11px;color:var(--muted);background:#20252c}
 .logout-btn{flex:0 0 auto;border:1px solid #4b3030;border-radius:5px;background:#241719;color:#e78686;font-size:11px;padding:7px 10px;opacity:1;transition:opacity .5s cubic-bezier(.32,.72,0,1),transform .5s cubic-bezier(.32,.72,0,1)}

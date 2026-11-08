@@ -25,8 +25,8 @@
         <div class="side-head"><span class="side-logo">CF</span><div class="side-brand"><b>CHMLFrp</b><small>测速中心</small></div></div>
         <div class="workspace-label">工作台</div>
         <nav class="nav">
-            <button class="nav-item active" data-view="speed" title="延迟测速"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4 13h7l-1 9 9-12h-7z"/></svg></span><span>延迟测速</span></button>
-            <button class="nav-item" data-view="bandwidth" title="带宽测速"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 17V7m5 10V4m6 13V9m5 8V2"/><path d="M2 20h20"/></svg></span><span>带宽测速</span></button>
+            <button class="nav-item active" data-view="bandwidth" title="带宽测速"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 17V7m5 10V4m6 13V9m5 8V2"/><path d="M2 20h20"/></svg></span><span>带宽测速</span></button>
+            <button class="nav-item" data-view="speed" title="延迟测速"><span class="nav-icon"><svg class="nav-fill" viewBox="0 0 24 24"><path d="M13 2 4 13h7l-1 9 9-12h-7z"/></svg></span><span>延迟测速</span></button>
             <button class="nav-item" data-view="tools" title="本机 IP"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg></span><span>本机 IP</span></button>
             <button class="nav-item" data-view="logs" title="运行日志"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span>运行日志</span></button>
             <button class="nav-item" data-view="settings" title="设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></span><span>设置</span></button>
@@ -35,7 +35,7 @@
     </aside>
 
     <main class="content">
-        <section id="view-speed" class="view active">
+        <section id="view-speed" class="view">
             <header class="compact-head"><div><h1>延迟测速</h1><p>TCPing 测各节点延迟与丢包，秒级出结果</p></div><div class="compact-stats"><span>节点 <b id="totalNodes">--</b></span></div><div class="toolbar"><button id="refreshBtn" class="tool-btn"><span>↻</span>刷新</button><div class="export-menu" id="preferExportMenu"><button id="preferExportBtn" class="tool-btn" type="button" disabled title="请先刷新加载节点" aria-haspopup="true" aria-expanded="false"><span>↓</span>导出<em>▾</em></button><div class="export-dropdown hidden" id="preferExportDropdown"><button type="button" data-export="csv">导出 CSV</button><button type="button" data-export="png">导出图片</button></div></div></div></header>
             <div class="filter-row"><span class="filter-caption">按节点组筛选</span><button class="filter active" data-filter="all">全部</button><button class="filter" data-filter="vip">会员节点</button><button class="filter" data-filter="user">普通节点</button><label class="node-search"><span>⌕</span><input id="preferNodeSearch" type="search" placeholder="搜索节点名称或编号" autocomplete="off"></label><span class="filter-count" id="filterCount">-- 个节点</span></div>
             <div class="view-scroll">
@@ -54,7 +54,7 @@
             <div class="bandwidth-progress prefer-progress-bar"><span id="preferProgressFill"></span></div>
         </section>
 
-        <section id="view-bandwidth" class="view">
+        <section id="view-bandwidth" class="view active">
             <header class="compact-head"><div><h1>带宽测速</h1><p>选择节点后开始测速</p></div><div class="compact-stats"><span>节点 <b id="bandwidthTotal">--</b></span></div><div class="toolbar"><button id="bandwidthRefreshBtn" class="tool-btn"><span>↻</span>刷新</button><div class="export-menu" id="bandwidthExportMenu"><button id="bandwidthExportBtn" class="tool-btn" type="button" disabled title="请先刷新加载节点" aria-haspopup="true" aria-expanded="false"><span>↓</span>导出<em>▾</em></button><div class="export-dropdown hidden" id="bandwidthExportDropdown"><button type="button" data-export="csv">导出 CSV</button><button type="button" data-export="png">导出图片</button></div></div></div></header>
             <div class="filter-row bandwidth-filters"><span class="filter-caption">按节点组筛选</span><button class="filter bandwidth-filter active" data-filter="all">全部</button><button class="filter bandwidth-filter" data-filter="vip">会员节点</button><button class="filter bandwidth-filter" data-filter="user">普通节点</button><label class="node-search"><span>⌕</span><input id="bandwidthNodeSearch" type="search" placeholder="搜索节点名称或编号" autocomplete="off"></label><span class="filter-count" id="bandwidthFilterCount">-- 个节点</span></div>
             <div class="view-scroll">
