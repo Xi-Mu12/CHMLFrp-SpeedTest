@@ -13,8 +13,8 @@
   "info": {
     "companyName": "XiMu",
     "productName": "CHMLFrp 测速",
-    "productVersion": "1.0.0",
+    "productVersion": "1.1.0",
     "copyright": "Copyright 2026 XiMu",
-    "comments": "CHMLFrp 节点延迟与带宽测速工具"
+    "comments": "CHMLFrp 节点带宽与延迟测速工具"
   }
 }
