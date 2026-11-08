@@ -23,18 +23,18 @@
 
 ## 当前状态
 
-| 模块 | 状态 | 说明 |
-| --- | --- | --- |
-| 节点数据 | ✅ 可用 | 从 `https://cf-v2.uapis.cn/node` 拉取并渲染为节点卡片；节点列表免登录，节点真实 IP 需登录后经 `/nodeinfo` 获取 |
-| 带宽测速 | ✅ 可用 | frpc 隧道 + 本地回环实测上下行吞吐；需登录，测速期间临时创建隧道（占用配额并消耗流量），测完立即删除；隧道数可并行 |
-| 延迟测速 | ✅ 可用 | 真实 TCPing；需登录；并行探测 `7000`、`80`、`81` 端口，按丢包率和延迟排序 |
-| CSV / PNG 导出 | ✅ 可用 | 通过系统保存对话框导出 |
-| 本机 IP / 公网归属地 | ✅ 可用 | 本机地址由系统枚举，公网信息来自 ipwho.is（优先 IPv6，失败回落 IPv4；含大洲、首都、区号、时区、旗帜等） |
-| MC 服务器查询 | ✅ 可用 | Java 版 Server List Ping（含 `_minecraft._tcp` SRV 解析）与基岩版 RakNet Ping，手写协议编解码，不依赖第三方库 |
-| 运行日志 | ✅ 可用 | 按天落盘保留 7 天，可导出成文件；界面保留最近 1000 条 |
-| 托盘、开机自启、主题 | ✅ 可用 | 开机自启行为随平台实现不同 |
-| OAuth2/OIDC 登录 | ✅ 可用 | 内置 Public Client `client_id`，浏览器确认设备码授权，支持环境变量覆盖 |
-| 自动更新 | ✅ Windows 可用 | GitHub Releases 检查 + SHA256 校验 + 独立更新程序替换；非 Windows 仅提示前往下载 |
+| 模块 | 状态          | 说明 |
+| --- |---------------| --- |
+| 节点数据 | 可用          | 从 `https://cf-v2.uapis.cn/node` 拉取并渲染为节点卡片；节点列表免登录，节点真实 IP 需登录后经 `/nodeinfo` 获取 |
+| 带宽测速 | 可用          | frpc 隧道 + 本地回环实测上下行吞吐；需登录，测速期间临时创建隧道（占用配额并消耗流量），测完立即删除；隧道数可并行 |
+| 延迟测速 | 可用          | 真实 TCPing；需登录；并行探测 `7000`、`80`、`81` 端口，按丢包率和延迟排序 |
+| CSV / PNG 导出 | 可用          | 通过系统保存对话框导出 |
+| 本机 IP / 公网归属地 | 可用          | 本机地址由系统枚举，公网信息来自 ipwho.is（优先 IPv6，失败回落 IPv4；含大洲、首都、区号、时区、旗帜等） |
+| MC 服务器查询 | 可用          | Java 版 Server List Ping（含 `_minecraft._tcp` SRV 解析）与基岩版 RakNet Ping，手写协议编解码，不依赖第三方库 |
+| 运行日志 | 可用          | 按天落盘保留 7 天，可导出成文件；界面保留最近 1000 条 |
+| 托盘、开机自启、主题 | 可用          | 开机自启行为随平台实现不同 |
+| OAuth2/OIDC 登录 | 可用          | 内置 Public Client `client_id`，浏览器确认设备码授权，支持环境变量覆盖 |
+| 自动更新 |  Windows 可用 | GitHub Releases 检查 + SHA256 校验 + 独立更新程序替换；非 Windows 仅提示前往下载 |
 
 ## 使用带宽测速
 
@@ -64,15 +64,6 @@
 
 测速参数：每个节点 TCPing 4 次、单次超时 3 秒、最大并发 20；丢包率超过 50% 的节点不计入排行榜。节点可连端口并不统一，`7000`、`80`、`81` 会并行探测，取第一个可连通者用于测速（不硬编码单一端口）。
 
-## 登录配置（可选覆盖）
-
-登录使用 OAuth 2.0 设备码授权流程（RFC 8628），不使用或保存 `client_secret`。点击登录后，应用会在系统浏览器中打开授权确认页并显示配对码（形如 `XXXX-XXXX`）；在浏览器中确认后应用自动完成登录，不需要手动输入配对码，也不需要配置本地回调地址。应用已内置 Public Client `client_id`，通常无需额外配置。如需在开发环境切换客户端，可以设置：
-
-```powershell
-$env:QZHUA_CLIENT_ID = "你的 client_id"
-```
-
-应用的授权请求范围（scope）为 `profile offline_access chmlfrp_api`；邮箱等账户资料由 CHMLFrp `/userinfo` 接口获取。更换 client_id 时，需要保证新客户端在账户中心开启设备码授权并使用兼容的 scope。
 
 ## 环境要求
 
@@ -130,33 +121,6 @@ MC_LIVE=1 go test -tags desktop,production -run TestLive -v .
 - `.github/workflows/ci.yml`：push 到 `main`/`master` 或提 PR 时自动跑 `go vet` 与 `go test`（windows-latest）。
 - `.github/workflows/release.yml`：**手动触发**时三端打包；推送 `v*` tag 时额外发布到 GitHub Release（自动更新的数据源）。
 
-## 自动更新与发布
-
-Windows 版本内置自动更新：启动后静默检查 GitHub Releases，发现新版本时展示更新公告，确认后后台流式下载、校验 SHA256、解压，再由独立的 `updater.exe` 在主程序退出后替换文件并重启。
-
-- 检查源：`https://api.github.com/repos/Xi-Mu12/CHMLFrp-SpeedTest/releases/latest`（公开仓库，匿名访问，客户端不含任何 Token）。
-- 安装包命名固定：`CHMLFrp-SpeedTest-windows-amd64.zip`，内含 `CHMLFrp-SpeedTest.exe` 与 `updater.exe`。
-- 校验：使用 Release Asset 的 `digest`（`sha256:` 格式）；摘要缺失直接拒绝安装。
-- 安装：先备份旧文件，替换失败自动回滚；ZIP 解压拒绝路径穿越与符号链接。
-- 跳过版本、自动检查开关、最近检查时间保存在 `settings.json`，自动检查每 12 小时最多一次。
-- 非 Windows 平台暂不支持自动安装，界面会退化为"前往下载"。
-
-发布新版本：
-
-```bash
-git tag v1.2.0
-git push origin v1.2.0
-```
-
-CI 会用 tag 注入 `-X main.version=v1.2.0` 并构建 `updater.exe`。**Release 的说明（body）就是客户端展示的更新公告**，它取自 `.github/release-notes/current.md`：打 tag 前先改这个文件并提交，再把 tag 推上去。
-
-写公告时注意排版，前端是用 `textContent` 原样渲染的，不做 Markdown 解析：
-
-- 可用：空行分段、`·` 或 `-` 开头的行、「新增 / 优化 / 修复」这类纯文本小标题。
-- 不要用：`#` 标题、`**粗体**`、表格、引用块、代码块——这些语法会原样出现在更新弹窗里。
-
-> 注意：GitHub 在部分网络环境下直连不稳定。客户端会遵循系统代理设置（`HTTP(S)_PROXY`）；若目标用户普遍无代理，后续可考虑自有镜像或 CDN 转发，但下载源仍需固定，不能让客户端接受任意 URL。
-
 ## 项目结构
 
 根目录下的 Go 文件按职责分组如下（分组只是便于阅读，实际都在根目录）：
@@ -213,6 +177,14 @@ CI 会用 tag 注入 `-X main.version=v1.2.0` 并构建 `updater.exe`。**Releas
 - [GitHub Releases](https://github.com/Xi-Mu12/CHMLFrp-SpeedTest/releases)：自动更新源，公开仓库匿名访问，客户端不含任何 Token；只用 `releases/latest`，自动排除 Draft 与 Pre-release。
 - QZhua OIDC 服务：仅在配置 `QZHUA_CLIENT_ID` 后用于账户登录。
 
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+### Pull Request要求
+
+- 当编写代码时必须是develop分支，提交pr时必须指向develop分支
+- 当`git commit`时请遵循**Conventional Commits**规范
 ## 法律与隐私
 
 - [隐私政策](https://xi-mu12.github.io/CHMLFrp-SpeedTest/privacy.html)
