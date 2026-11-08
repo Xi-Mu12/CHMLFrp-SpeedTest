@@ -6,7 +6,7 @@
 
 基于 Wails + Go + 原生 Web 前端构建的桌面应用：并发探测节点延迟、经 frpc 隧道实测上下行吞吐，另带本机 IP 归属地与 Minecraft 服务器查询，Windows 版本内置自动更新。
 
-![延迟测速界面](./assets/screenshot-latency.png)
+![带宽测速界面](./assets/screenshot-bandwidth.png)
 
 ## 功能概览
 
