@@ -2,6 +2,35 @@ package main
 
 import "testing"
 
+// TestParsePortRange 覆盖 /nodeinfo 的 rport 各种写法。
+// 该字段决定建隧道的 remote_port 合法区间，解析错了就会被服务端拒绝。
+func TestParsePortRange(t *testing.T) {
+	cases := []struct {
+		raw    string
+		lo, hi int
+		wantOK bool
+	}{
+		{"8002-9000", 8002, 9000, true},
+		{"8002 - 9000", 8002, 9000, true},
+		{"8002~9000", 8002, 9000, true},
+		{"8002至9000", 8002, 9000, true},
+		{"8002", 8002, 8002, true},
+		{"  8002-9000  ", 8002, 9000, true},
+		{"", 0, 0, false},
+		{"abc", 0, 0, false},
+		{"9000-8002", 0, 0, false},  // 上下界颠倒
+		{"0-9000", 0, 0, false},     // 端口 0 非法
+		{"8002-70000", 0, 0, false}, // 超出 65535
+		{"8002-abc", 0, 0, false},
+	}
+	for _, c := range cases {
+		lo, hi, ok := parsePortRange(c.raw)
+		if ok != c.wantOK || lo != c.lo || hi != c.hi {
+			t.Errorf("parsePortRange(%q) = (%d,%d,%v)，期望 (%d,%d,%v)", c.raw, lo, hi, ok, c.lo, c.hi, c.wantOK)
+		}
+	}
+}
+
 // TestFilterNodesByGroup 覆盖分组过滤的全部入口值：
 // 空串 / all / 全部 都表示不过滤，其余按 nodegroup 精确（不区分大小写）匹配，多个值用逗号分隔。
 func TestFilterNodesByGroup(t *testing.T) {

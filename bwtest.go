@@ -327,10 +327,34 @@ func bwTunnelName(nodeID int) string {
 	return fmt.Sprintf("bw_%d_%d", nodeID, rand.Int63n(1000000000))
 }
 
+// pickRemotePort 在 [minPort, maxPort] 内挑一个建隧道用的远程端口。
+// 范围很窄（<=8 个）时按尝试次数轮换，避免 4 次重试都撞同一个被占用的端口。
+func pickRemotePort(minPort, maxPort, attempt int) int {
+	if maxPort <= minPort {
+		return minPort
+	}
+	span := maxPort - minPort + 1
+	if span <= 8 {
+		return minPort + (attempt-1)%span
+	}
+	return minPort + rand.Intn(span)
+}
+
 // testNodeBandwidth 单节点：建隧道 → 起 frpc → 测延迟 → 打流 → 清理
 func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, srv *bwServer, node NodeBasic, idx, total, seconds, parallel int) SpeedNodeDone {
 	res := SpeedNodeDone{ID: node.ID, Name: node.Name, Seconds: seconds}
 	proxyName := bwTunnelName(node.ID)
+
+	// 远程端口必须落在节点允许的范围内，否则服务端直接拒绝：
+	// “指定的端口不在允许的范围内”。范围由 /nodeinfo 的 rport 给出
+	// （例：#83 广州多线-2 限制 8002-9000），取不到时回退默认区间。
+	portMin, portMax := bwRemotePortMin, bwRemotePortMax
+	if lo, hi, ok := FetchNodePortRange(node.Name, token); ok {
+		portMin, portMax = lo, hi
+		if lo != bwRemotePortMin || hi != bwRemotePortMax {
+			a.emitSpeedLog("info", fmt.Sprintf("#%d %s 端口限制 %d-%d", node.ID, node.Name, lo, hi))
+		}
+	}
 
 	a.emitSpeedLog("info", fmt.Sprintf("(%d/%d) #%d %s · 创建临时隧道…", idx+1, total, node.ID, node.Name))
 	a.emitNodeProgress(node, 0.04)
@@ -367,7 +391,7 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 			res.Error = "已取消"
 			return res
 		}
-		remotePort := bwRemotePortMin + rand.Intn(bwRemotePortMax-bwRemotePortMin)
+		remotePort := pickRemotePort(portMin, portMax, attempt)
 		err := CreateTunnelAPI(token, CreateTunnelParams{
 			TunnelName: proxyName,
 			Node:       node.Name,

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -112,6 +113,10 @@ type NodeInfo struct {
 	RealIP string `json:"real_IP"`
 	RealIp string `json:"realIp"`
 	IPv6   string `json:"ipv6"`
+	// RPort 是节点允许的远程端口范围，形如 "8002-9000"（也可能只给单个端口）。
+	// 建隧道时用的 remote_port 必须落在该范围内，否则服务端拒绝：
+	// “指定的端口不在允许的范围内”。
+	RPort string `json:"rport"`
 }
 
 type nodeInfoResp struct {
@@ -185,9 +190,9 @@ func fetchNodes(force bool) ([]NodeBasic, error) {
 	return r.Data, nil
 }
 
-// FetchNodeInfo 按官方启动器的方式获取单个节点的真实 IP。
-// /nodeinfo 是受保护接口，token 传入 OAuth access_token。
-func FetchNodeInfo(nodeName, token string) (NodeInfo, error) {
+// fetchNodeDetail 取 /nodeinfo 的原始字段，不强制要求返回 IP。
+// 带宽测速只需要 rport（端口范围），部分节点可能没给 IP，这时不该整体失败。
+func fetchNodeDetail(nodeName, token string) (NodeInfo, error) {
 	var info NodeInfo
 	nodeName = strings.TrimSpace(nodeName)
 	token = strings.TrimSpace(token)
@@ -195,7 +200,7 @@ func FetchNodeInfo(nodeName, token string) (NodeInfo, error) {
 		return info, fmt.Errorf("节点名称为空")
 	}
 	if token == "" {
-		return info, fmt.Errorf("未登录，无法获取节点 IP")
+		return info, fmt.Errorf("未登录，无法获取节点信息")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, ApiBase+"/nodeinfo?node="+url.QueryEscape(nodeName), nil)
@@ -225,10 +230,59 @@ func FetchNodeInfo(nodeName, token string) (NodeInfo, error) {
 	if result.Data.IP == "" {
 		result.Data.IP = result.Data.RealIp
 	}
-	if result.Data.IP == "" {
+	return result.Data, nil
+}
+
+// FetchNodeInfo 按官方启动器的方式获取单个节点的真实 IP。
+// /nodeinfo 是受保护接口，token 传入 OAuth access_token。
+func FetchNodeInfo(nodeName, token string) (NodeInfo, error) {
+	info, err := fetchNodeDetail(nodeName, token)
+	if err != nil {
+		return info, err
+	}
+	if info.IP == "" {
 		return info, fmt.Errorf("节点信息未返回 IP")
 	}
-	return result.Data, nil
+	return info, nil
+}
+
+// FetchNodePortRange 返回节点允许的远程端口范围，ok=false 表示接口没给出或无法解析。
+// 失败不返回错误：拿不到范围时由调用方回退到默认范围，不应让测速直接失败。
+func FetchNodePortRange(nodeName, token string) (int, int, bool) {
+	info, err := fetchNodeDetail(nodeName, token)
+	if err != nil {
+		return 0, 0, false
+	}
+	return parsePortRange(info.RPort)
+}
+
+// parsePortRange 解析 "8002-9000"、"8002~9000"、"8002 至 9000" 这类端口范围，
+// 也接受单个端口 "8002"。解析不出来或数值非法时返回 ok=false。
+func parsePortRange(raw string) (int, int, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, 0, false
+	}
+	parse := func(v string) (int, bool) {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n <= 0 || n > 65535 {
+			return 0, false
+		}
+		return n, true
+	}
+	for _, sep := range []string{"-", "~", "至", "—"} {
+		if i := strings.Index(s, sep); i > 0 {
+			lo, okLo := parse(s[:i])
+			hi, okHi := parse(s[i+len(sep):])
+			if okLo && okHi && lo <= hi {
+				return lo, hi, true
+			}
+		}
+	}
+	if n, ok := parse(s); ok {
+		return n, n, true
+	}
+	return 0, 0, false
 }
 
 // FetchNodeIPs 并发获取节点 IP，单个节点失败不会阻断其它节点。

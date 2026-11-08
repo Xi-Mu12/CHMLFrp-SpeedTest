@@ -12,6 +12,31 @@ import (
 	"time"
 )
 
+// TestPickRemotePort 确认建隧道用的端口始终落在节点允许的范围内。
+// 窄区间要按尝试次数轮换，避免 4 次重试都撞同一个端口。
+func TestPickRemotePort(t *testing.T) {
+	for _, tc := range []struct {
+		lo, hi, attempt, want int
+	}{
+		{8002, 8002, 1, 8002},
+		{8002, 8002, 3, 8002},
+		{8002, 8005, 1, 8002},
+		{8002, 8005, 4, 8005},
+		{8002, 8005, 5, 8002}, // 超出区间长度后回绕
+	} {
+		if got := pickRemotePort(tc.lo, tc.hi, tc.attempt); got != tc.want {
+			t.Errorf("pickRemotePort(%d,%d,%d) = %d，期望 %d", tc.lo, tc.hi, tc.attempt, got, tc.want)
+		}
+	}
+
+	// 宽区间随机取值也必须落在范围内。
+	for i := 1; i <= 200; i++ {
+		if got := pickRemotePort(8002, 9000, i); got < 8002 || got > 9000 {
+			t.Fatalf("pickRemotePort 越界：%d", got)
+		}
+	}
+}
+
 func TestBandwidthWorkers(t *testing.T) {
 	for _, tc := range []struct{ desired, selected, want int }{
 		{0, 5, 2}, {3, 5, 3}, {9, 8, 8},
