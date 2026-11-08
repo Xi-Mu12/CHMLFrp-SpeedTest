@@ -8,7 +8,6 @@ node_modules
 
 # IDE / 编辑器
 # 只共享运行配置，其余（workspace.xml、模块元数据等）留在本地。
-# 注意必须写 .idea/* 而不是 .idea/：被整体排除的目录 Git 不会进入，后面的 ! 也救不回来。
 .idea/*
 !.idea/runConfigurations/
 !.idea/run-wails-dev.sh
