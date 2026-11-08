@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CHMLFrp-SpeedTest · CHMLFrp 节点延迟与带宽测速工具</title>
+<title>CHMLFrp-SpeedTest · CHMLFrp 节点带宽与延迟测速工具</title>
 <style>
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
@@ -53,13 +53,15 @@
   <img class="logo" src="./logo.webp" alt="CHMLFrp-SpeedTest 应用图标" />
   <h1>CHMLFrp-SpeedTest</h1>
   <p class="tagline">
-    基于 Wails + Go + 原生 Web 前端构建的桌面工具，用于快速筛选延迟低、可用性好的 CHMLFrp 节点，
-    并测出经隧道通路的真实上下行带宽。
+    基于 Wails + Go + 原生 Web 前端构建的桌面工具：并发探测 CHMLFrp 节点延迟，经 frpc 隧道实测通路的上下行带宽，
+    另带本机 IP 归属地与 Minecraft 服务器查询，Windows 版本内置自动更新。
   </p>
 
   <div class="badges">
-    <span class="badge">真实 TCPing 延迟测速</span>
     <span class="badge">frpc 隧道带宽测速</span>
+    <span class="badge">真实 TCPing 延迟测速</span>
+    <span class="badge">Minecraft 服务器查询</span>
+    <span class="badge">本机 IP 归属地</span>
     <span class="badge">Windows · Linux · macOS</span>
   </div>
 
@@ -70,7 +72,7 @@
 
   <p class="notice">
     <strong>说明：</strong>本应用主要在你的本机运行，作者不运营用于收集测速记录的后台，也不集成遥测、崩溃统计或行为分析。
-    使用账号登录、本机 IP 查询或应用内推广入口时，应用会按功能访问相应的第三方服务，具体范围与处理方式见隐私政策。
+    使用账号登录、本机 IP 查询、Minecraft 服务器查询、自动更新或应用内推广入口时，应用会按功能访问相应的第三方服务，具体范围与处理方式见隐私政策。
   </p>
 
   <div class="footer">
