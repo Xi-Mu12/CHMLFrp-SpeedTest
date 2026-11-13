@@ -22,6 +22,7 @@ import (
 type config struct {
 	pid      int
 	stage    string
+	setup    string
 	target   string
 	exe      string
 	relaunch bool
@@ -36,7 +37,8 @@ type swapped struct {
 func main() {
 	var c config
 	flag.IntVar(&c.pid, "pid", 0, "主程序进程 ID")
-	flag.StringVar(&c.stage, "stage", "", "解压后的新版本暂存目录")
+	flag.StringVar(&c.stage, "stage", "", "解压后的新版本暂存目录（绿色版替换文件用）")
+	flag.StringVar(&c.setup, "setup", "", "安装包路径（安装版静默升级用）")
 	flag.StringVar(&c.target, "target", "", "安装目录")
 	flag.StringVar(&c.exe, "exe", "", "更新后要启动的可执行文件名")
 	flag.BoolVar(&c.relaunch, "relaunch", true, "替换成功后是否启动新版本")
@@ -47,8 +49,12 @@ func main() {
 	logger := newLogger(c.logPath)
 	defer logger.close()
 
-	if c.stage == "" || c.target == "" || c.exe == "" {
-		logger.printf("参数不完整：stage/target/exe 均为必填")
+	if c.target == "" || c.exe == "" {
+		logger.printf("参数不完整：target/exe 均为必填")
+		os.Exit(2)
+	}
+	if c.stage == "" && c.setup == "" {
+		logger.printf("参数不完整：--stage 与 --setup 必须提供其一")
 		os.Exit(2)
 	}
 	if c.pid <= 0 {
@@ -82,6 +88,26 @@ func main() {
 	// 进程刚退出时句柄可能还没完全释放，给系统一点时间。
 	time.Sleep(600 * time.Millisecond)
 
+	// 安装版：跑安装包静默覆盖安装，文件由安装器负责，不需要自己替换。
+	if c.setup != "" {
+		logger.printf("运行安装包: %s", c.setup)
+		if err := runInstaller(c.setup, logger); err != nil {
+			logger.printf("安装包执行失败: %v", err)
+			// 失败也要把程序拉起来，否则用户面对的是「点了更新，然后什么都没了」。
+			if code := relaunch(c, logger); code != 0 {
+				os.Exit(code)
+			}
+			os.Exit(5)
+		}
+		_ = os.Remove(c.setup)
+		logger.printf("安装完成")
+		if code := relaunch(c, logger); code != 0 {
+			os.Exit(code)
+		}
+		logger.printf("更新完成")
+		return
+	}
+
 	logger.printf("开始替换文件: %s -> %s", c.stage, c.target)
 	done, err := apply(c.stage, c.target)
 	if err != nil {
@@ -92,20 +118,60 @@ func main() {
 	commit(done)
 	logger.printf("替换完成，共 %d 个文件", len(done))
 
-	if c.relaunch {
-		exePath := filepath.Join(c.target, c.exe)
-		cmd := exec.Command(exePath)
-		cmd.Dir = c.target
-		if err := cmd.Start(); err != nil {
-			logger.printf("启动新版本失败: %v", err)
-			os.Exit(6)
-		}
-		logger.printf("已启动新版本: %s", exePath)
+	if code := relaunch(c, logger); code != 0 {
+		os.Exit(code)
 	}
 
 	// 暂存目录和安装包由主程序下载，安装成功后一并清理。
 	_ = os.RemoveAll(c.stage)
 	logger.printf("更新完成")
+}
+
+// runInstaller 静默运行 NSIS 安装包。
+//
+// 不传 /D=：NSIS 要求 /D 必须是最后一个参数且不能加引号，而安装路径含空格
+// （产品名是「CHMLFrp 测速」），Go 拼接命令行会自动加引号导致解析失败。
+// 安装版用的目录本来就是安装器上次记住的那个默认目录，静默升级不需要重新指定。
+func runInstaller(setupPath string, logger *logger) error {
+	cmd := exec.Command(setupPath, "/S")
+	cmd.Dir = filepath.Dir(setupPath)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("安装包返回错误: %w", err)
+		}
+		return nil
+	case <-time.After(5 * time.Minute):
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("安装包执行超时（5 分钟）")
+	}
+}
+
+// relaunch 启动更新后的主程序，返回应使用的退出码（0 表示成功）。
+//
+// 安装包刚退出时监听端口/文件句柄可能还没释放，重试几次比直接报错稳妥。
+func relaunch(c config, logger *logger) int {
+	if !c.relaunch {
+		return 0
+	}
+	exePath := filepath.Join(c.target, c.exe)
+	var lastErr error
+	for attempt := 0; attempt < 10; attempt++ {
+		cmd := exec.Command(exePath)
+		cmd.Dir = c.target
+		if lastErr = cmd.Start(); lastErr == nil {
+			logger.printf("已启动新版本: %s", exePath)
+			return 0
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	logger.printf("启动新版本失败: %v", lastErr)
+	return 6
 }
 
 // relocateIfNeeded 把自己复制到临时目录并重新执行，然后立即退出。

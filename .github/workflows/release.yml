@@ -84,37 +84,86 @@ jobs:
             echo "value=dev" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build
+      # 安装包的「文件属性」和「应用和功能」里的版本号取自 wails.json 的
+      # info.productVersion（wails 没有对应的命令行参数），而程序内版本来自 tag。
+      # 不同步的话安装包会一直显示 wails.json 里那个旧版本号。
+      # 只在 tag 形如 v1.2.3 时才改：VIProductVersion 要求纯数字四段，dev 会构建失败。
+      - name: Sync product version (Windows)
+        if: matrix.os == 'windows'
         shell: bash
-        run: wails build -clean -ldflags "-X main.version=${{ steps.version.outputs.value }}"
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          if [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            ver="${ref#v}"
+            sed -i 's/"productVersion": "[^"]*"/"productVersion": "'"$ver"'"/' wails.json
+            grep -n 'productVersion' wails.json
+          else
+            echo "非正式 tag（$ref），保留 wails.json 里的 productVersion"
+          fi
 
-      # 更新辅助程序必须单独编译，随主程序一起放进 ZIP。
+      # makensis 只有在主脚本带 UTF-8 BOM 时才把整棵 include 树按 UTF-8 解析；
+      # 而 wails 生成的 wails_tools.nsh 含中文产品名且不带 BOM，缺了它就会报
+      # "Bad text encoding: project.nsi:1"。这里兜底补齐，避免改文件时丢了 BOM 直接发不出包。
+      - name: Ensure project.nsi has UTF-8 BOM (Windows)
+        if: matrix.os == 'windows'
+        shell: bash
+        run: |
+          f=build/windows/installer/project.nsi
+          head -c 3 "$f" | od -An -tx1 | tr -d ' \n' | grep -q '^efbbbf' \
+            && echo "BOM 已存在" \
+            || { printf '\xef\xbb\xbf' | cat - "$f" > "$f.bom" && mv "$f.bom" "$f"; echo "已补 BOM"; }
+
+      # 更新辅助程序必须在 wails build 之前编译：
+      #  - wails build -clean 会清空 build/bin，所以放到 build/updater 下避让；
+      #  - 自定义的 build/windows/installer/project.nsi 会用 File 把它打进安装包，
+      #    makensis 在 wails build 末尾执行，此时文件必须已经存在。
       - name: Build updater (Windows)
         if: matrix.os == 'windows'
         shell: bash
-        run: go build -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/updater.exe ./cmd/updater
+        run: |
+          mkdir -p build/updater
+          go build -trimpath -ldflags "-s -w -H=windowsgui" -o build/updater/updater.exe ./cmd/updater
 
       - name: Build updater (Unix)
         if: matrix.os != 'windows'
         shell: bash
-        run: go build -trimpath -ldflags "-s -w" -o build/bin/updater ./cmd/updater
+        run: |
+          mkdir -p build/updater
+          go build -trimpath -ldflags "-s -w" -o build/updater/updater ./cmd/updater
+
+      - name: Build
+        shell: bash
+        run: |
+          flags=""
+          if [[ "${{ matrix.os }}" == "windows" ]]; then
+            # -nsis 让 wails 在编译后调用 makensis 产出安装包；
+            # -installscope user 装到 %LOCALAPPDATA%\Programs，静默自动更新不需要 UAC。
+            flags="-nsis -installscope user"
+          fi
+          wails build -clean $flags -ldflags "-X main.version=${{ steps.version.outputs.value }}"
 
       - name: Package (Windows)
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
+          # 绿色版：主程序 + 更新辅助程序，自动更新与老版本客户端都读这个 zip
           Copy-Item build/bin/CHMLFrp-SpeedTest.exe dist/
-          Copy-Item build/bin/updater.exe dist/
-          Compress-Archive -Path dist/*.exe -DestinationPath dist/CHMLFrp-SpeedTest-windows-amd64.zip
+          Copy-Item build/updater/updater.exe dist/
+          Compress-Archive -Path dist/CHMLFrp-SpeedTest.exe, dist/updater.exe `
+            -DestinationPath dist/CHMLFrp-SpeedTest-windows-amd64.zip
           Remove-Item dist/CHMLFrp-SpeedTest.exe, dist/updater.exe
+          # 安装版：wails 产出 *-installer.exe，重命名成客户端约定的资产名
+          Move-Item build/bin/CHMLFrp-SpeedTest-amd64-installer.exe `
+            dist/CHMLFrp-SpeedTest-windows-amd64-setup.exe
+          Get-ChildItem dist | Format-Table Name, Length
 
       - name: Package (Linux)
         if: matrix.os == 'linux'
         run: |
           mkdir -p dist
           cp build/bin/CHMLFrp-SpeedTest dist/
-          cp build/bin/updater dist/
+          cp build/updater/updater dist/
           cd dist
           zip CHMLFrp-SpeedTest-linux-amd64.zip CHMLFrp-SpeedTest updater
           rm CHMLFrp-SpeedTest updater
@@ -129,7 +178,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/*.zip
+          # Windows 会同时产出 zip（绿色版）与 setup.exe（安装版），其余平台只有 zip。
+          path: dist/*
           if-no-files-found: error
 
   # 只有 tag 触发的构建才发布；手动构建只产出 artifact，不影响线上版本。
@@ -154,7 +204,7 @@ jobs:
       - name: Collect packages
         run: |
           mkdir -p dist
-          find artifacts -name '*.zip' -exec cp {} dist/ \;
+          find artifacts -type f \( -name '*.zip' -o -name '*.exe' \) -exec cp {} dist/ \;
           ls -lh dist
 
       # Release body 会原样展示在客户端的更新弹窗里（前端用 textContent 渲染，
@@ -165,7 +215,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: CHMLFrp 测速 ${{ github.ref_name }}
-          files: dist/*.zip
+          files: dist/*
           body_path: .github/release-notes/current.md
           draft: false
           prerelease: false

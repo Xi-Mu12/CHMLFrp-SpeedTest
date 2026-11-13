@@ -242,6 +242,7 @@ export namespace main {
 	    pageUrl: string;
 	    size: number;
 	    canAutoInstall: boolean;
+	    installMode?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInfo(source);
@@ -256,6 +257,7 @@ export namespace main {
 	        this.pageUrl = source["pageUrl"];
 	        this.size = source["size"];
 	        this.canAutoInstall = source["canAutoInstall"];
+	        this.installMode = source["installMode"];
 	    }
 	}
 	export class UpdatePrefs {

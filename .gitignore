@@ -1,5 +1,10 @@
 # 构建产物
 build/bin
+# CI 在 build 阶段编译的更新辅助程序（会打进安装包），不进仓库
+build/updater
+# wails 每次构建都会按 wails.json 重新生成这两个，仓库里不该存副本
+build/windows/installer/wails_tools.nsh
+build/windows/installer/tmp
 frontend/dist
 *.exe
 
@@ -7,19 +12,19 @@ frontend/dist
 node_modules
 
 # IDE / 编辑器
-# 只共享运行配置，其余（workspace.xml、模块元数据等）留在本地。
+# 只共享运行配置，其余留在本地。
 .idea/*
 !.idea/runConfigurations/
 !.idea/run-wails-dev.sh
 # .vscode/launch.json 是 Wails 模板开发配置，保留共享
 
-# 智能体工作目录（本地记忆，不进仓库）
+# 智能体工作目录
 .workbuddy/
 
 # 备份文件
 *.bak
 
-# 本地源素材（最终成品已在 src/assets 中）
+# 本地源素材
 frontend/轻爪翻译客户端发布横幅.png
 
 # 操作系统杂项

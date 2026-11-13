@@ -39,7 +39,12 @@ type Release struct {
 	Notes       string
 	PageURL     string
 	PublishedAt time.Time
-	Asset       Asset
+
+	// Asset 是绿色包（zip）：解压后逐文件替换，绿色版用户与老版本客户端都靠它。
+	Asset Asset
+	// Installer 是安装包（setup.exe）：安装版用户优先用它，能一并更新卸载项与快捷方式。
+	// 非 Windows 或该版本没有安装包时为空。
+	Installer Asset
 }
 
 type apiAsset struct {
@@ -66,6 +71,15 @@ var apiClient = &http.Client{Timeout: 25 * time.Second}
 // AssetName 约定安装包命名，必须在 CI 打包时严格一致。
 func AssetName(goos, goarch string) string {
 	return fmt.Sprintf("CHMLFrp-SpeedTest-%s-%s.zip", goos, goarch)
+}
+
+// InstallerName 是 NSIS 安装包的资产名，同样由 CI 重命名成这个格式。
+// 非 Windows 没有安装包，返回空串表示「该平台不需要安装器」。
+func InstallerName(goos, goarch string) string {
+	if goos != "windows" {
+		return ""
+	}
+	return fmt.Sprintf("CHMLFrp-SpeedTest-%s-%s-setup.exe", goos, goarch)
 }
 
 // LatestRelease 查询最新正式版（GitHub 的 /releases/latest 已排除 draft 与 prerelease）。
@@ -109,41 +123,47 @@ func LatestRelease(ctx context.Context) (*Release, error) {
 	}
 
 	name := AssetName(runtime.GOOS, runtime.GOARCH)
-	var picked *apiAsset
-	for i := range raw.Assets {
-		if raw.Assets[i].Name == name {
-			picked = &raw.Assets[i]
-			break
+	setupName := InstallerName(runtime.GOOS, runtime.GOARCH)
+
+	find := func(assetName string) *apiAsset {
+		for i := range raw.Assets {
+			if raw.Assets[i].Name == assetName {
+				return &raw.Assets[i]
+			}
 		}
+		return nil
 	}
-	if picked == nil {
-		// 没有对应平台的包不算错误：仍然把版本信息给 UI，
-		// 由前端退化成"前往下载页"，而不是让检查更新直接失败。
-		return &Release{
-			Tag:         raw.TagName,
-			Name:        raw.Name,
-			Notes:       raw.Body,
-			PageURL:     raw.HTMLURL,
-			PublishedAt: raw.PublishedAt,
-		}, nil
-	}
-	digest := strings.TrimSpace(picked.Digest)
-	if digest == "" {
-		// 有包却没有摘要就无法保证下载内容与发布一致，宁可拒绝也不盲装。
-		return nil, fmt.Errorf("安装包缺少 SHA256 摘要，已拒绝更新")
+	// toAsset 要求资产必须带摘要：没有摘要就无法保证下载内容与发布一致，宁可拒绝也不盲装。
+	toAsset := func(a *apiAsset) (Asset, error) {
+		digest := strings.TrimSpace(a.Digest)
+		if digest == "" {
+			return Asset{}, fmt.Errorf("安装包 %s 缺少 SHA256 摘要，已拒绝更新", a.Name)
+		}
+		return Asset{Name: a.Name, URL: a.BrowserDownloadURL, Size: a.Size, Digest: digest}, nil
 	}
 
-	return &Release{
+	rel := &Release{
 		Tag:         raw.TagName,
 		Name:        raw.Name,
 		Notes:       raw.Body,
 		PageURL:     raw.HTMLURL,
 		PublishedAt: raw.PublishedAt,
-		Asset: Asset{
-			Name:   picked.Name,
-			URL:    picked.BrowserDownloadURL,
-			Size:   picked.Size,
-			Digest: digest,
-		},
-	}, nil
+	}
+	var err2 error
+	if zip := find(name); zip != nil {
+		if rel.Asset, err2 = toAsset(zip); err2 != nil {
+			return nil, err2
+		}
+	}
+	// 安装包是可选的：老版本 Release 只有 zip，没有它照样能更新。
+	if setupName != "" {
+		if setup := find(setupName); setup != nil {
+			if rel.Installer, err2 = toAsset(setup); err2 != nil {
+				return nil, err2
+			}
+		}
+	}
+	// 没有对应平台的包不算错误：仍然把版本信息给 UI，
+	// 由前端退化成"前往下载页"，而不是让检查更新直接失败。
+	return rel, nil
 }

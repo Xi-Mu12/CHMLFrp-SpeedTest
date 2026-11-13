@@ -30,11 +30,56 @@ type UpdateInfo struct {
 	PageURL        string `json:"pageUrl"`
 	Size           int64  `json:"size"`
 	CanAutoInstall bool   `json:"canAutoInstall"`
+	// InstallMode 决定这次更新怎么落地：setup=运行安装包静默安装，zip=解压覆盖。
+	// 前端据此显示不同文案。
+	InstallMode string `json:"installMode,omitempty"`
 
 	// 以下字段只供后端使用，不参与前端序列化。
 	assetURL  string
 	assetName string
 	digest    string
+}
+
+// updateHelperName 是随包分发的更新辅助程序；安装版会把它一起装进安装目录，
+// 由它在主程序退出后运行新版本的安装包。
+const updateHelperName = "updater.exe"
+
+// updateTargetDir 返回主程序所在目录，也就是安装目录（或绿色版解压目录）。
+func updateTargetDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(exe), nil
+}
+
+// installedBySetup 判断当前跑的是安装版还是绿色版。
+//
+// 判据是安装目录里有没有 NSIS 留下的 uninstall.exe；绿色版解压出来没有这个文件。
+// 同时要求 updater.exe 在场，否则静默升级没法执行，直接退回 zip 覆盖流程。
+func installedBySetup(target string) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(target, "uninstall.exe")); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(target, updateHelperName)); err != nil {
+		return false
+	}
+	return true
+}
+
+// chooseUpdatePayload 决定这次用哪个资产、走哪条落地路径。
+//
+// 安装版优先安装包：只有安装器才能一并更新卸载项、快捷方式和 WebView2 运行时；
+// 绿色版必须用 zip，否则会被搬到 %LOCALAPPDATA% 留下一个孤儿目录。
+// 老版本 Release 没有安装包时，安装版也会退化成 zip 覆盖（目录本来就是同一个）。
+func chooseUpdatePayload(rel *updater.Release, installed bool) (string, updater.Asset) {
+	if installed && rel.Installer.URL != "" {
+		return "setup", rel.Installer
+	}
+	return "zip", rel.Asset
 }
 
 // UpdateState 是推给前端的完整快照，前端不需要自己拼状态。
@@ -125,23 +170,28 @@ func (a *App) CheckForUpdate(manual bool) (UpdateState, error) {
 		}
 	}
 
+	// 按「当前是安装版还是绿色版」挑资产：安装版有安装包就用安装包。
+	target, _ := updateTargetDir()
+	mode, asset := chooseUpdatePayload(rel, installedBySetup(target))
+
 	info := &UpdateInfo{
 		Version:        rel.Tag,
 		Name:           rel.Name,
 		Notes:          rel.Notes,
 		PublishedAt:    rel.PublishedAt.Format("2006-01-02"),
 		PageURL:        rel.PageURL,
-		Size:           rel.Asset.Size,
-		CanAutoInstall: runtime.GOOS == "windows" && rel.Asset.URL != "",
-		assetURL:       rel.Asset.URL,
-		assetName:      rel.Asset.Name,
-		digest:         rel.Asset.Digest,
+		Size:           asset.Size,
+		CanAutoInstall: runtime.GOOS == "windows" && asset.URL != "",
+		InstallMode:    mode,
+		assetURL:       asset.URL,
+		assetName:      asset.Name,
+		digest:         asset.Digest,
 	}
 	st := a.mutateUpdate(func(s *UpdateState) {
 		s.Status = "available"
 		s.Info = info
 		s.Downloaded = 0
-		s.Total = rel.Asset.Size
+		s.Total = asset.Size
 		s.Error = ""
 	})
 	return st, nil
@@ -222,6 +272,17 @@ func (a *App) downloadAndStage(ctx context.Context, info UpdateInfo) {
 
 	stage := filepath.Join(dir, "staging-"+sanitizeVersion(info.Version))
 	_ = os.RemoveAll(stage)
+	if info.InstallMode == "setup" {
+		// 安装包本身就是可执行文件，不需要解压：直接把落盘的 exe 当作「暂存产物」。
+		// 校验（大小 + SHA256）已在 updater.Download 里完成。
+		a.updateMu.Lock()
+		a.updateStage = archive
+		a.updateState.Status = "ready"
+		a.updateState.Downloaded = a.updateState.Total
+		a.updateMu.Unlock()
+		a.emitUpdate()
+		return
+	}
 	if err := updater.ExtractZip(archive, stage); err != nil {
 		a.failUpdate("解压更新包失败：" + err.Error())
 		return
@@ -237,7 +298,8 @@ func (a *App) downloadAndStage(ctx context.Context, info UpdateInfo) {
 
 // InstallUpdateAndRestart 启动独立更新进程，然后退出主程序。
 //
-// 更新进程会等本进程真正退出后才替换文件，所以这里必须先启动它再调用 QuitApp。
+// 更新进程会等本进程真正退出后才动手（安装版是运行安装包，绿色版是替换文件），
+// 所以这里必须先启动它再调用 QuitApp。
 func (a *App) InstallUpdateAndRestart() error {
 	a.updateMu.Lock()
 	st := a.updateState
@@ -251,24 +313,37 @@ func (a *App) InstallUpdateAndRestart() error {
 		return fmt.Errorf("当前平台暂不支持自动安装，请到发布页手动下载")
 	}
 
-	updaterPath := filepath.Join(stage, "updater.exe")
-	if _, err := os.Stat(updaterPath); err != nil {
-		return fmt.Errorf("更新包缺少 updater.exe，请重新下载")
-	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("定位主程序失败: %w", err)
 	}
 	target := filepath.Dir(exePath)
 
+	// 安装版：helper 常驻安装目录（由安装器一起装上），升级动作是把安装包交给它。
+	// 绿色版：helper 在新包的解压目录里，升级动作是逐文件替换。
+	isSetup := st.Info != nil && st.Info.InstallMode == "setup"
+	helperPath := filepath.Join(stage, updateHelperName)
+	modeArgs := []string{"--stage", stage}
+	if isSetup {
+		helperPath = filepath.Join(target, updateHelperName)
+		modeArgs = []string{"--setup", stage}
+	}
+	if _, err := os.Stat(helperPath); err != nil {
+		if isSetup {
+			return fmt.Errorf("安装目录缺少 %s，无法静默升级；请手动运行安装包：%s", updateHelperName, stage)
+		}
+		return fmt.Errorf("更新包缺少 %s，请重新下载", updateHelperName)
+	}
+
 	args := []string{
 		"--pid", strconv.Itoa(os.Getpid()),
-		"--stage", stage,
 		"--target", target,
 		"--exe", filepath.Base(exePath),
 		"--log", filepath.Join(os.TempDir(), "chmlfrp-updater.log"),
 	}
-	cmd := exec.Command(updaterPath, args...)
+	args = append(args, modeArgs...)
+
+	cmd := exec.Command(helperPath, args...)
 	cmd.Dir = target
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动更新程序失败: %w", err)
