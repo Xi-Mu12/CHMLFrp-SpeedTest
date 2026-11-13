@@ -386,108 +386,157 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 		}
 	}()
 
-	for attempt := 1; attempt <= 4; attempt++ {
+	// 一次循环 = 一个「端口尝试」：建隧道 → 等隧道出现 → 起 frpc → 等就绪。
+	// 为什么必须按端口重试：建隧道接口只校验端口是否落在节点允许范围内，
+	// 并不校验该端口此刻在节点上是否真的空闲；等 frpc 连上去，frps 才回
+	// "port unavailable"（实测 #139 山东枣庄BGP，端口段 30000-65535）。
+	// 这种情况换一个端口重建隧道即可恢复，不该直接判失败。
+	const (
+		maxCreateTries = 4 // 同一端口内建隧道请求的重试次数（命名冲突/瞬时失败）
+		maxPortTries   = 3 // 端口被占用时换端口重来的次数
+	)
+	var (
+		err        error
+		proc       *frpcProc
+		serverAddr string // 循环后测延迟兜底要用，所以提到循环外
+		serverPort int
+	)
+	// proc 在循环里会被替换，统一在这里兜底停止（Stop 是幂等的）。
+	defer func() {
+		if proc != nil {
+			proc.Stop()
+		}
+	}()
+
+	attempt := 0
+	for portTry := 1; ; portTry++ {
+		created = false
+		for i := 0; i < maxCreateTries; i++ {
+			if a.speedCancelled(runID) {
+				res.Error = "已取消"
+				return res
+			}
+			attempt++
+			remotePort := pickRemotePort(portMin, portMax, attempt)
+			err := CreateTunnelAPI(token, CreateTunnelParams{
+				TunnelName: proxyName,
+				Node:       node.Name,
+				LocalIP:    "127.0.0.1",
+				PortType:   "tcp",
+				LocalPort:  srv.Port(),
+				RemotePort: remotePort,
+			})
+			if err == nil {
+				created = true
+				break
+			}
+			msg := err.Error()
+			if isFatalTunnelErr(msg) {
+				res.Error = "创建隧道被拒绝：" + msg
+				atomic.CompareAndSwapInt64(&a.speedRun, runID, runID+1)
+				return res
+			}
+			a.emitSpeedLog("warn", fmt.Sprintf("#%d %s 建隧道失败（第 %d 次，端口 %d）：%s", node.ID, node.Name, attempt, remotePort, msg))
+			if i == maxCreateTries-1 {
+				res.Error = "创建临时隧道失败：" + msg
+				return res
+			}
+			proxyName = bwTunnelName(node.ID)
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		tun, err = waitTunnelByName(token, proxyName, bwTunnelWait, func() bool { return a.speedCancelled(runID) })
+		if err != nil {
+			res.Error = err.Error()
+			return res
+		}
+		if tun.Dorp == "" {
+			res.Error = "隧道未分配远程端口"
+			return res
+		}
+		a.trackBWResource(nil, tun.ID, token)
+		tracked = true
 		if a.speedCancelled(runID) {
 			res.Error = "已取消"
 			return res
 		}
-		remotePort := pickRemotePort(portMin, portMax, attempt)
-		err := CreateTunnelAPI(token, CreateTunnelParams{
-			TunnelName: proxyName,
-			Node:       node.Name,
-			LocalIP:    "127.0.0.1",
-			PortType:   "tcp",
-			LocalPort:  srv.Port(),
-			RemotePort: remotePort,
-		})
-		if err == nil {
-			created = true
-			break
-		}
-		msg := err.Error()
-		if isFatalTunnelErr(msg) {
-			res.Error = "创建隧道被拒绝：" + msg
-			atomic.CompareAndSwapInt64(&a.speedRun, runID, runID+1)
+		if strings.TrimSpace(tun.IP) == "" {
+			res.Error = "隧道缺少公网连接地址"
 			return res
 		}
-		a.emitSpeedLog("warn", fmt.Sprintf("#%d %s 建隧道失败（第 %d 次，端口 %d）：%s", node.ID, node.Name, attempt, remotePort, msg))
-		if attempt == 4 {
-			res.Error = "创建临时隧道失败：" + msg
+		remotePort, convErr := strconv.Atoi(strings.TrimSpace(tun.Dorp))
+		if convErr != nil || remotePort <= 0 {
+			res.Error = "隧道远程端口无效：" + tun.Dorp
 			return res
 		}
-		proxyName = bwTunnelName(node.ID)
-		time.Sleep(500 * time.Millisecond)
-	}
+		serverAddr = tun.NodeIP
+		if serverAddr == "" {
+			serverAddr = tun.IP
+		}
+		serverPort = tun.ServerPort
+		if serverPort <= 0 {
+			serverPort = 7000 // 老数据的兜底（frpc 默认 server_port）
+		}
+		a.emitNodeProgress(node, 0.12)
 
-	var err error
-	tun, err = waitTunnelByName(token, proxyName, bwTunnelWait, func() bool { return a.speedCancelled(runID) })
-	if err != nil {
-		res.Error = err.Error()
-		return res
-	}
-	if tun.Dorp == "" {
-		res.Error = "隧道未分配远程端口"
-		return res
-	}
-	a.trackBWResource(nil, tun.ID, token)
-	tracked = true
-	if a.speedCancelled(runID) {
-		res.Error = "已取消"
-		return res
-	}
-	if strings.TrimSpace(tun.IP) == "" {
-		res.Error = "隧道缺少公网连接地址"
-		return res
-	}
-	remotePort, convErr := strconv.Atoi(strings.TrimSpace(tun.Dorp))
-	if convErr != nil || remotePort <= 0 {
-		res.Error = "隧道远程端口无效：" + tun.Dorp
-		return res
-	}
-	serverAddr := tun.NodeIP
-	if serverAddr == "" {
-		serverAddr = tun.IP
-	}
-	serverPort := tun.ServerPort
-	if serverPort <= 0 {
-		serverPort = 7000 // 老数据的兜底（frpc 默认 server_port）
-	}
-	a.emitNodeProgress(node, 0.12)
-
-	// frpc 配置与进程
-	ini, err := os.CreateTemp("", "chmlfrp-bw-*.ini")
-	if err != nil {
-		res.Error = "创建 frpc 配置失败：" + err.Error()
-		return res
-	}
-	iniPath := ini.Name()
-	ini.Close()
-	defer os.Remove(iniPath)
-	nodeToken := strings.TrimSpace(tun.NodeToken)
-	if nodeToken == "" {
-		nodeToken = "ChmlFrpToken"
-	}
-	if err := writeFrpcIni(iniPath, serverAddr, serverPort, userToken, nodeToken, "127.0.0.1", srv.Port(), remotePort, proxyName); err != nil {
-		res.Error = "生成 frpc 配置失败：" + err.Error()
-		return res
-	}
-	a.emitSpeedLog("info", fmt.Sprintf("#%d %s · 启动 frpc → %s:%d", node.ID, node.Name, serverAddr, serverPort))
-	if a.speedCancelled(runID) {
-		res.Error = "已取消"
-		return res
-	}
-	proc, err := startFrpcProc(frpcBin, iniPath)
-	if err != nil {
-		a.reportFrpcFailure(frpcBin, "启动 frpc", err)
-		res.Error = err.Error()
-		return res
-	}
-	defer proc.Stop()
-	a.trackBWResource(proc, tun.ID, token)
-	tracked = true
-	if err := proc.WaitReady(bwFrpcReady); err != nil {
-		res.Error = "frpc 未就绪：" + err.Error()
-		return res
+		// frpc 配置与进程
+		ini, err := os.CreateTemp("", "chmlfrp-bw-*.ini")
+		if err != nil {
+			res.Error = "创建 frpc 配置失败：" + err.Error()
+			return res
+		}
+		iniPath := ini.Name()
+		ini.Close()
+		defer os.Remove(iniPath)
+		nodeToken := strings.TrimSpace(tun.NodeToken)
+		if nodeToken == "" {
+			nodeToken = "ChmlFrpToken"
+		}
+		if err := writeFrpcIni(iniPath, serverAddr, serverPort, userToken, nodeToken, "127.0.0.1", srv.Port(), remotePort, proxyName); err != nil {
+			res.Error = "生成 frpc 配置失败：" + err.Error()
+			return res
+		}
+		a.emitSpeedLog("info", fmt.Sprintf("#%d %s · 启动 frpc → %s:%d", node.ID, node.Name, serverAddr, serverPort))
+		if a.speedCancelled(runID) {
+			res.Error = "已取消"
+			return res
+		}
+		proc, err = startFrpcProc(frpcBin, iniPath)
+		if err != nil {
+			a.reportFrpcFailure(frpcBin, "启动 frpc", err)
+			res.Error = err.Error()
+			return res
+		}
+		a.trackBWResource(proc, tun.ID, token)
+		tracked = true
+		if err := proc.WaitReady(bwFrpcReady); err != nil {
+			// frps 报端口被占：这个隧道建得成但绑不上，清掉后换个端口重来。
+			if portTry < maxPortTries && isPortConflictErr(err) {
+				a.emitSpeedLog("warn", fmt.Sprintf("#%d %s 远程端口 %s 已被占用，换端口重试（第 %d/%d 次）",
+					node.ID, node.Name, tun.Dorp, portTry, maxPortTries))
+				proc.Stop()
+				proc = nil
+				if tracked {
+					a.clearBWResource(tun.ID)
+					tracked = false
+				}
+				// 删不掉就别再新建：泄漏的隧道会一直占配额，
+				// 交给上面的 defer 再试一次删除并中止整轮测速。
+				if !a.deleteTunnelWithRetry(token, tun.ID) {
+					res.Error = "端口被占用后清理临时隧道失败，已中止测速"
+					return res
+				}
+				tun = nil
+				created = false
+				proxyName = bwTunnelName(node.ID)
+				// 服务端释放端口不是瞬时的，给它一点时间再重新申请。
+				time.Sleep(300 * time.Millisecond)
+				continue
+			}
+			res.Error = "frpc 未就绪：" + err.Error()
+			return res
+		}
+		break
 	}
 	a.emitNodeProgress(node, 0.22)
 

@@ -527,6 +527,33 @@ func matchFrpcFail(line string) string {
 	return ""
 }
 
+// isPortConflictErr 判断 frpc 的就绪失败是否属于「远程端口已被占用」。
+//
+// frps 的原文是 `start error: port unavailable`，chmlfrp 定制版 frpc 日志里是
+// `启动失败: port unavailable`。建隧道接口只校验端口范围、不校验占用情况，
+// 所以这种失败必须换端口重建隧道，直接判失败会白丢一个节点。
+func isPortConflictErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	patterns := []string{
+		"port unavailable",
+		"port already",
+		"address already in use",
+		"port is occupied",
+		"端口已被占用",
+		"端口被占用",
+		"端口不可用",
+	}
+	for _, p := range patterns {
+		if strings.Contains(low, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
 // frpcEnv 去掉代理相关的环境变量，保证 frpc 直连节点
 func frpcEnv() []string {
 	drop := map[string]bool{
