@@ -67,10 +67,6 @@ jobs:
             build-essential
 
       # Windows: 装 NSIS，构建时同时产出安装包
-      - name: Install NSIS (Windows)
-        if: matrix.os == 'windows'
-        run: choco install nsis -y --no-progress
-
       # 版本号单一来源：tag 直接用 tag，手动构建记为 dev。
       # 通过 -X main.version 注入，覆盖 wails.json 里的 productVersion。
       - name: Resolve version
@@ -113,6 +109,35 @@ jobs:
             && echo "BOM 已存在" \
             || { printf '\xef\xbb\xbf' | cat - "$f" > "$f.bom" && mv "$f.bom" "$f"; echo "已补 BOM"; }
 
+      # wails 在找不到 makensis 时只打印 "Warning: Cannot create installer: makensis not found"
+      # 就返回 nil —— 构建仍然成功，但安装包根本没生成（CI 首次发版就是这样挂的）。
+      # windows-latest 镜像自带 NSIS，但安装目录不在 PATH 上，wails 用的是
+      # exec.LookPath("makensis")，所以必须显式把它加进 GITHUB_PATH；镜像里没有就现装。
+      - name: Ensure makensis available (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          function Find-Makensis {
+            $candidates = @(
+              "$env:ProgramFiles\NSIS\makensis.exe",
+              "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+            )
+            foreach ($p in $candidates) { if (Test-Path $p) { return $p } }
+            $cmd = Get-Command makensis -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+            return $null
+          }
+          $mk = Find-Makensis
+          if (-not $mk) {
+            Write-Host "未找到 NSIS，尝试安装"
+            choco install nsis -y --no-progress
+            $mk = Find-Makensis
+          }
+          if (-not $mk) { throw "makensis 不可用，无法生成安装包" }
+          Write-Host "makensis: $mk"
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $mk) -Encoding utf8
+          & $mk /VERSION
+
       # 更新辅助程序必须在 wails build 之前编译：
       #  - wails build -clean 会清空 build/bin，所以放到 build/updater 下避让；
       #  - 自定义的 build/windows/installer/project.nsi 会用 File 把它打进安装包，
@@ -141,6 +166,20 @@ jobs:
             flags="-nsis -installscope user"
           fi
           wails build -clean $flags -ldflags "-X main.version=${{ steps.version.outputs.value }}"
+
+      # 安装包缺失时 wails 不会失败，这里做硬校验：宁可这一步红掉，
+      # 也不要等到 Move-Item 报一个看不懂的 "path does not exist"。
+      - name: Verify installer was generated (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $p = "build/bin/CHMLFrp-SpeedTest-amd64-installer.exe"
+          if (-not (Test-Path $p)) {
+            Write-Host "=== build/bin 内容 ==="
+            if (Test-Path build/bin) { Get-ChildItem build/bin | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host }
+            throw "安装包未生成：$p 不存在（检查上面的 makensis 步骤与 project.nsi 编码）"
+          }
+          Get-Item $p | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
 
       - name: Package (Windows)
         if: matrix.os == 'windows'
