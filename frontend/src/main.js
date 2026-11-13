@@ -2233,7 +2233,8 @@ $('ipQueryInput').addEventListener('keydown', (e) => {
 // ---------- 自动更新 ----------
 // 后端是唯一状态源：检查、下载、校验、暂存都在 Go 侧完成，
 // 前端只渲染 updateState 快照并触发动作，避免两套状态互相打架。
-const UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
+// 启动即检查，不按时间间隔节流：被跳过的版本由后端静默忽略，
+// 因此每次启动最多只是多一次 api.github.com 请求。
 let updateSnapshot = { status: 'idle', currentVersion: '' };
 
 const formatSize = (bytes) => {
@@ -2252,7 +2253,7 @@ updateSettings.innerHTML = `<div class="settings-group-head">更新</div>
             <button id="checkUpdateBtn" class="btn secondary" type="button">检查更新</button>
         </div>
         <div class="setting-row">
-            <div class="setting-text"><b>启动时自动检查更新</b><small>每 12 小时最多检查一次；发现新版本时提示，可跳过指定版本。</small></div>
+            <div class="setting-text"><b>启动时自动检查更新</b><small>每次启动都会检查；发现新版本时提示，可跳过指定版本。</small></div>
             <input id="setAutoUpdate" type="checkbox" class="switch"/>
         </div>
     </div>`;
@@ -2292,9 +2293,14 @@ function renderUpdateState(st) {
     skip.classList.toggle('hidden', status !== 'available');
 
     if (status === 'available') {
+        // 安装版（setup）会跑安装包静默安装，绿色版是解压覆盖，文案要区分开，
+        // 否则用户以为只是换个 exe，结果看到安装程序在动会困惑。
+        const setupMode = info.installMode === 'setup';
         badge.textContent = '发现新版本';
-        hint.textContent = info.canAutoInstall ? '下载完成后重启软件即可完成更新。' : '当前平台暂不支持自动安装，将打开下载页面。';
-        action.textContent = info.canAutoInstall ? '立即更新' : '前往下载';
+        hint.textContent = !info.canAutoInstall
+            ? '当前平台暂不支持自动安装，将打开下载页面。'
+            : (setupMode ? '将下载安装包并静默安装，完成后自动重启。' : '下载完成后重启软件即可完成更新。');
+        action.textContent = info.canAutoInstall ? (setupMode ? '下载并安装' : '立即更新') : '前往下载';
     } else if (status === 'downloading') {
         badge.textContent = '正在下载更新';
         const ratio = updateRatio(st.downloaded, st.total);
@@ -2305,7 +2311,9 @@ function renderUpdateState(st) {
         action.classList.add('secondary');
     } else if (status === 'ready') {
         badge.textContent = '更新已准备就绪';
-        hint.textContent = '重启软件即可完成安装，也可以稍后手动重启。';
+        hint.textContent = info.installMode === 'setup'
+            ? '将运行安装包完成安装，随后自动重启。'
+            : '重启软件即可完成安装，也可以稍后手动重启。';
         action.textContent = '立即重启';
     } else {
         badge.textContent = '更新失败';
@@ -2398,9 +2406,8 @@ async function initUpdater() {
         const current = String(prefs.currentVersion || '').replace(/^v/i, '');
         $('updateSettingsStatus').textContent = current ? `当前版本 v${current}` : '--';
         if (prefs.disableAutoUpdate) return;
-        // 启动 3 秒后再查，避免和节点拉取、登录恢复抢带宽。
-        const last = (prefs.lastUpdateCheck || 0) * 1000;
-        if (Date.now() - last < UPDATE_CHECK_INTERVAL_MS) return;
+        // 每次启动都查一次（不再受上次检查时间限制）；延时 3 秒启动是为了
+        // 不和节点拉取、登录恢复抢带宽。跳过该版本的用户由后端静默拦下，不弹提示。
         await CheckForUpdate(false);
     } catch (err) {
         // 自动检查失败保持安静，不影响正常使用。
