@@ -652,11 +652,13 @@
 .frpc-cache-feedback progress{display:block;width:100%;height:6px;margin-top:10px;accent-color:var(--text)}
 .frpc-cache-feedback progress.hidden{display:none}
 .frpc-download-card{max-width:480px}
-.frpc-download-description{margin:18px 0 12px;color:var(--muted);font-size:13px;line-height:1.8}
-.frpc-download-status{color:var(--muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
-.frpc-download-progress{display:block;width:100%;height:6px;margin-top:16px;accent-color:var(--text)}
+/* 卡片本身 padding:0（标题栏要通栏到底边），所以内容元素各自留 20px 边距，
+   否则文字会顶到卡片左侧、按钮会贴住右侧和底边。 */
+.frpc-download-description{margin:18px 20px 12px;color:var(--muted);font-size:13px;line-height:1.8}
+.frpc-download-status{margin:0 20px;color:var(--muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.frpc-download-progress{display:block;width:calc(100% - 40px);height:6px;margin:16px 20px 0;accent-color:var(--text)}
 .frpc-download-progress.hidden{display:none}
-.frpc-download-card .task-actions{margin:20px 0 0}
+.frpc-download-card .task-actions{margin:20px 20px 18px}
 
 /* Keep the button width stable while its icon switches to a loading ring. */
 .test-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:116px}
