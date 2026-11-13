@@ -249,3 +249,32 @@ func TestVerifyCachedFrpc(t *testing.T) {
 		}
 	})
 }
+
+// TestIsPortConflictErr 端口被占 vs 其它失败要区分开：
+// 只有前者值得换端口重建隧道，后者换端口也白搭（比如 token 错、节点未上线）。
+func TestIsPortConflictErr(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		// frps 原文（实测 #139 山东枣庄BGP）
+		{"2026/11/13 21:40:25 [W] [control.go:170] [bw_139_721849619] 启动失败: port unavailable", true},
+		{"start error: port unavailable", true},
+		{"start error: port already used", true},
+		{"listen tcp :7000: bind: address already in use", true},
+		{"端口已被占用", true},
+		{"端口不可用", true},
+		// 不该重试的
+		{"login to server failed: token in login doesn't match token from configuration", false},
+		{"等待 frpc 隧道就绪超时（登录成功，等待隧道就绪）", false},
+		{"frcp 已退出: （无日志输出）", false},
+	}
+	for _, c := range cases {
+		if got := isPortConflictErr(fmt.Errorf("%s", c.msg)); got != c.want {
+			t.Errorf("isPortConflictErr(%q) = %v，期望 %v", c.msg, got, c.want)
+		}
+	}
+	if isPortConflictErr(nil) {
+		t.Error("nil 错误不应判为端口冲突")
+	}
+}
