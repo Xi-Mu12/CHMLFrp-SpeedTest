@@ -1635,13 +1635,30 @@ function updateExportUI() {
 }
 
 // ---------- 导出（节点列表 + 延迟测速结果）：CSV / 图片 ----------
+// 导出结果一律按实测延迟排序，而不是节点编号顺序：
+// 图片只截前 12 行，按编号排就成了「编号最小的 12 个」，跟快慢无关；
+// CSV 虽是全量清单，但用户看的是「哪个节点最快」，编号序同样不直观。
 const preferExportRows = () => {
     // 只让「测到了延迟」的节点参与排名：超时节点在 results 里是 -1，
     // 若直接排序会拿到第 1 名（-1 最小），导出表就出现"-1ms 排名 1"的假数据。
     const sorted = [...results.entries()].filter(([, d]) => d >= 0).sort((a, b) => a[1] - b[1]);
     const rank = new Map(sorted.map(([id], i) => [id, i + 1]));
+    // 排序键：0=测到延迟（按延迟升序）；1=TCPing 超时但 ICMP 在线（按 ICMP 升序）；
+    // 2=超时/未测。同组内再按编号兜底，保证多次导出的顺序稳定。
+    const speedKey = (n) => {
+        const d = results.get(n.id);
+        if (typeof d === 'number' && d >= 0) return [0, d];
+        const icmp = preferStats.get(n.id)?.icmp;
+        if (typeof icmp === 'number' && icmp >= 0) return [1, icmp];
+        return [2, 0];
+    };
+    const list = nodes.slice().sort((a, b) => {
+        const [ga, va] = speedKey(a);
+        const [gb, vb] = speedKey(b);
+        return ga !== gb ? ga - gb : (va !== vb ? va - vb : a.id - b.id);
+    });
     const rows = [['编号', '名称', '区域', '节点组', '地域', '建站', 'UDP', '防御', '延迟(ms)', '延迟排名']];
-    for (const n of nodes) {
+    for (const n of list) {
         const d = results.get(n.id);
         const st = preferStats.get(n.id);
         // TCPing 超时但 ICMP 在线的节点，在导出里也注明，避免被当成节点离线
@@ -1697,7 +1714,7 @@ const exportPreferPng = async () => {
     ctx.fillStyle = color('--muted', '#8b939e');
     ctx.font = `12px ${CANVAS_FONT}`;
     const tested = [...results.keys()].length;
-    ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　延迟越低越好`, 36, 74);
+    ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　按延迟从低到高排序`, 36, 74);
     const cols = [36, 96, 330, 430, 510, 590, 670, 760, 850];
     const headers = ['编号', '名称', '区域', '节点组', '地域', 'UDP', '防御', '延迟', '排名'];
     ctx.fillStyle = color('--dim', '#5c6570');
@@ -1772,7 +1789,23 @@ const hasBandwidthResult = (r) => Boolean(r && (r.down !== undefined || r.up !==
 const bandwidthExportRows = () => {
     const ts = new Date().toLocaleString('zh-CN');
     const rows = [['编号', '名称', '节点组', '地域', '延迟(ms)', '下载(Mbps)', '上传(Mbps)', '平均(Mbps)', '测速时长(秒)', '测速时间']];
-    for (const n of nodes) {
+    // 与延迟导出一致：一律按下载速度从高到低排（跟界面带宽排行默认维度一致），
+    // 未测/失败的垫底，同值按编号兜底。
+    const downOf = (n) => {
+        const r = bandwidthResults.get(String(n.id));
+        if (!hasBandwidthResult(r) || r.error) return -1;
+        const v = Number(r.down);
+        return Number.isFinite(v) ? v : -1;
+    };
+    const list = nodes.slice().sort((a, b) => {
+        const va = downOf(a);
+        const vb = downOf(b);
+        if (va < 0 && vb < 0) return a.id - b.id;
+        if (va < 0) return 1;
+        if (vb < 0) return -1;
+        return vb !== va ? vb - va : a.id - b.id;
+    });
+    for (const n of list) {
         const r = bandwidthResults.get(String(n.id));
         const tested = hasBandwidthResult(r);
         rows.push([
@@ -1827,7 +1860,7 @@ const exportBandwidthPng = async () => {
     ctx.fillStyle = color('--muted', '#8b939e');
     ctx.font = `12px ${CANVAS_FONT}`;
     const tested = nodes.filter((n) => hasBandwidthResult(bandwidthResults.get(String(n.id)))).length;
-    ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　单次时长：${settings.testSeconds} 秒`, 36, 74);
+    ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　单次时长：${settings.testSeconds} 秒　按下载速度从高到低排序`, 36, 74);
     const cols = [36, 96, 330, 390, 470, 560, 650, 740];
     const headers = ['编号', '名称', '节点组', '地域', '延迟', '下载', '上传', '平均'];
     ctx.fillStyle = color('--dim', '#5c6570');
