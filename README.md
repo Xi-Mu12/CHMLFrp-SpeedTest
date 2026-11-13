@@ -184,8 +184,8 @@ MC_LIVE=1 go test -tags desktop,production -run TestLive -v .
 
 ### Pull Request要求
 
-- 当编写代码时必须是develop分支，提交pr时必须指向develop分支
 - 当`git commit`时请遵循**Conventional Commits**规范
+- 
 ## 法律与隐私
 
 - [隐私政策](https://xi-mu12.github.io/CHMLFrp-SpeedTest/privacy.html)
