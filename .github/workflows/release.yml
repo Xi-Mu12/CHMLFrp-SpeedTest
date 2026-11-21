@@ -229,7 +229,8 @@ jobs:
           dpkg-deb --info dist/CHMLFrp-SpeedTest-linux-amd64.deb
           dpkg-deb --contents dist/CHMLFrp-SpeedTest-linux-amd64.deb
           # 数据包根目录必须是 755，否则安装时可能改坏 / 的权限
-          mode="$(dpkg-deb --contents dist/CHMLFrp-SpeedTest-linux-amd64.deb | head -n1 | awk '{print $1}')"
+          # （用 awk 读完整个输出，避免 head 提前关闭管道触发 tar EPIPE）
+          mode="$(dpkg-deb --contents dist/CHMLFrp-SpeedTest-linux-amd64.deb | awk 'NR==1{print $1}')"
           [[ "$mode" == "drwxr-xr-x" ]] || { echo "deb 根目录权限异常: $mode"; exit 1; }
 
       - name: Package (macOS)
