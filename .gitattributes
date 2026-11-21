@@ -2,3 +2,5 @@
 # 但 shell 脚本必须保持 LF，否则 bash 读到的 shebang 和每行尾部都带 \r，
 # 会报 "$'\r': command not found" 之类的错误。
 *.sh text eol=lf
+# .desktop 是 Linux 桌面入口，带 CRLF 会被部分桌面环境当成非法字段。
+*.desktop text eol=lf

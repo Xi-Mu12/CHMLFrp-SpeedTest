@@ -1,5 +1,7 @@
 # 构建产物
 build/bin
+# CI / 本地打包输出（zip、deb、setup.exe 等）
+dist/
 # CI 在 build 阶段编译的更新辅助程序（会打进安装包），不进仓库
 build/updater
 # wails 每次构建都会按 wails.json 重新生成这两个，仓库里不该存副本

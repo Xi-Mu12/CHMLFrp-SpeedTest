@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=CHMLFrp 测速
+GenericName=Network Speed Test
+Comment=CHMLFrp 节点带宽与延迟测速工具
+Exec=chmlfrp-speedtest
+TryExec=chmlfrp-speedtest
+Icon=chmlfrp-speedtest
+Terminal=false
+Categories=Network;Utility;
+Keywords=CHMLFrp;frp;speedtest;
+StartupNotify=true
+StartupWMClass=chmlfrp-speedtest

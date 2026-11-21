@@ -6,6 +6,9 @@ name: Build
 #
 # 自动更新只支持 Windows：Release 中的 Windows 包必须同时包含主程序与 updater.exe，
 # 命名固定为 CHMLFrp-SpeedTest-windows-amd64.zip，客户端按 GOOS/GOARCH 匹配。
+#
+# Linux 除绿色版 zip 外，还会用 dpkg-deb 打出 .deb 安装包（见 build/linux/package-deb.sh）；
+# macOS 除 zip 外还会用 hdiutil 打出 .dmg 安装镜像（见 build/darwin/package-dmg.sh）。
 on:
   workflow_dispatch:
   push:
@@ -51,13 +54,14 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
 
       # Linux: Wails WebKitGTK + systray 依赖
+      # 用 4.1 而不是 4.0：Ubuntu 24.04 / Debian 13 已移除 4.0，22.04 也提供 4.1。
       - name: Install Linux dependencies
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-3-dev \
-            libwebkit2gtk-4.0-dev \
+            libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
             libgl1-mesa-dev \
@@ -69,6 +73,7 @@ jobs:
       # Windows: 装 NSIS，构建时同时产出安装包
       # 版本号单一来源：tag 直接用 tag，手动构建记为 dev。
       # 通过 -X main.version 注入，覆盖 wails.json 里的 productVersion。
+      # pkgversion 供 .deb 使用：Debian 版本号必须以数字开头，所以 dev 记为 0.0.0-dev。
       - name: Resolve version
         id: version
         shell: bash
@@ -76,22 +81,30 @@ jobs:
           ref="${GITHUB_REF_NAME}"
           if [[ "$ref" == v* ]]; then
             echo "value=$ref" >> "$GITHUB_OUTPUT"
+            echo "pkgversion=${ref#v}" >> "$GITHUB_OUTPUT"
           else
             echo "value=dev" >> "$GITHUB_OUTPUT"
+            echo "pkgversion=0.0.0-dev" >> "$GITHUB_OUTPUT"
           fi
 
-      # 安装包的「文件属性」和「应用和功能」里的版本号取自 wails.json 的
-      # info.productVersion（wails 没有对应的命令行参数），而程序内版本来自 tag。
+      # 安装包的「文件属性」和「应用和功能」里的版本号、macOS 应用包的
+      # CFBundleShortVersionString 都取自 wails.json 的 info.productVersion
+      # （wails 没有对应的命令行参数），而程序内版本来自 tag。
       # 不同步的话安装包会一直显示 wails.json 里那个旧版本号。
       # 只在 tag 形如 v1.2.3 时才改：VIProductVersion 要求纯数字四段，dev 会构建失败。
-      - name: Sync product version (Windows)
-        if: matrix.os == 'windows'
+      - name: Sync product version (Windows / macOS)
+        if: matrix.os != 'linux'
         shell: bash
         run: |
           ref="${GITHUB_REF_NAME}"
           if [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             ver="${ref#v}"
-            sed -i 's/"productVersion": "[^"]*"/"productVersion": "'"$ver"'"/' wails.json
+            if sed --version >/dev/null 2>&1; then
+              sed -i 's/"productVersion": "[^"]*"/"productVersion": "'"$ver"'"/' wails.json
+            else
+              # BSD sed（macOS）的 -i 必须带一个备份后缀参数
+              sed -i '' 's/"productVersion": "[^"]*"/"productVersion": "'"$ver"'"/' wails.json
+            fi
             grep -n 'productVersion' wails.json
           else
             echo "非正式 tag（$ref），保留 wails.json 里的 productVersion"
@@ -160,12 +173,17 @@ jobs:
         shell: bash
         run: |
           flags=""
+          tags=""
           if [[ "${{ matrix.os }}" == "windows" ]]; then
             # -nsis 让 wails 在编译后调用 makensis 产出安装包；
             # -installscope user 装到 %LOCALAPPDATA%\Programs，静默自动更新不需要 UAC。
             flags="-nsis -installscope user"
+          elif [[ "${{ matrix.os }}" == "linux" ]]; then
+            # 链接 WebKitGTK 4.1（Ubuntu 22.04+ / Debian 12+），
+            # 4.0 在 Ubuntu 24.04 起已不再提供。
+            tags="-tags webkit2_41"
           fi
-          wails build -clean $flags -ldflags "-X main.version=${{ steps.version.outputs.value }}"
+          wails build -clean $flags $tags -ldflags "-X main.version=${{ steps.version.outputs.value }}"
 
       # 安装包缺失时 wails 不会失败，这里做硬校验：宁可这一步红掉，
       # 也不要等到 Move-Item 报一个看不懂的 "path does not exist"。
@@ -199,25 +217,33 @@ jobs:
 
       - name: Package (Linux)
         if: matrix.os == 'linux'
+        shell: bash
         run: |
           mkdir -p dist
           cp build/bin/CHMLFrp-SpeedTest dist/
           cp build/updater/updater dist/
-          cd dist
-          zip CHMLFrp-SpeedTest-linux-amd64.zip CHMLFrp-SpeedTest updater
-          rm CHMLFrp-SpeedTest updater
+          (cd dist && zip CHMLFrp-SpeedTest-linux-amd64.zip CHMLFrp-SpeedTest updater \
+            && rm CHMLFrp-SpeedTest updater)
+          # 安装版：dpkg-deb 打包，装到 /usr/bin 并带桌面入口与图标
+          bash build/linux/package-deb.sh "${{ steps.version.outputs.pkgversion }}" amd64 dist
+          dpkg-deb --info dist/CHMLFrp-SpeedTest-linux-amd64.deb
+          dpkg-deb --contents dist/CHMLFrp-SpeedTest-linux-amd64.deb
 
       - name: Package (macOS)
         if: matrix.os == 'macos'
         run: |
           mkdir -p dist
-          cd build/bin && zip -ry ../../dist/CHMLFrp-SpeedTest-darwin-arm64.zip CHMLFrp-SpeedTest.app
+          (cd build/bin && zip -ry ../../dist/CHMLFrp-SpeedTest-darwin-arm64.zip CHMLFrp-SpeedTest.app)
+          # 安装版：dmg 里放 .app 与 Applications 快捷方式，打开后拖入即可安装
+          bash build/darwin/package-dmg.sh arm64 dist
+          ls -lh dist
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          # Windows 会同时产出 zip（绿色版）与 setup.exe（安装版），其余平台只有 zip。
+          # Windows 会同时产出 zip（绿色版）与 setup.exe（安装版），
+          # Linux 产出 zip（绿色版）与 deb（安装版），macOS 产出 zip 与 dmg。
           path: dist/*
           if-no-files-found: error
 
@@ -243,7 +269,7 @@ jobs:
       - name: Collect packages
         run: |
           mkdir -p dist
-          find artifacts -type f \( -name '*.zip' -o -name '*.exe' \) -exec cp {} dist/ \;
+          find artifacts -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.deb' -o -name '*.dmg' \) -exec cp {} dist/ \;
           ls -lh dist
 
       # Release body 会原样展示在客户端的更新弹窗里（前端用 textContent 渲染，

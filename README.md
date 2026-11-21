@@ -73,7 +73,10 @@
 - Node.js 20 或更高版本。
 - Wails CLI v2.16.0。
 - Linux/macOS 构建还需要 Wails 对应的平台依赖。
+- Linux 构建链接 WebKitGTK 4.1（Ubuntu 22.04+ / Debian 12+），需要 `libwebkit2gtk-4.1-dev`；4.0 在 Ubuntu 24.04 起已不再提供。
 - 可选：NSIS。装了才有 `.exe` 安装包（`wails build -nsis`），没装则只产出裸 exe。
+- 可选：dpkg-deb（Ubuntu/Debian 自带）。用于把 Linux 产物打成 `.deb` 安装包。
+- 可选：hdiutil（macOS 自带）。用于把 macOS 产物打成 `.dmg` 安装镜像。
 
 ## 开发与构建
 
@@ -102,6 +105,38 @@ npm install
 npm run dev
 ```
 
+### Linux 安装包（deb）
+
+Linux 产物除了绿色版 zip，还可以打成 `.deb` 安装包：
+
+```bash
+# 先按上面的方式 wails build，再执行：
+bash build/linux/package-deb.sh 1.46.0 amd64
+# 输出 dist/CHMLFrp-SpeedTest-linux-amd64.deb
+```
+
+版本号必须符合 Debian 规则（以数字开头）；CI 发版时取 tag 去掉 `v`，手动构建记为
+`0.0.0-dev`。安装后主程序位于 `/usr/bin/chmlfrp-speedtest`，并带应用列表入口与图标：
+
+```bash
+sudo apt install ./CHMLFrp-SpeedTest-linux-amd64.deb
+```
+
+deb 依赖 GTK3、WebKitGTK 4.1 与 AppIndicator，适用于 Ubuntu 22.04+ / Debian 12+。
+
+### macOS 安装包（dmg）
+
+macOS 同样保留绿色版 zip，并额外产出 `.dmg` 安装镜像：
+
+```bash
+# 先 wails build，再执行：
+bash build/darwin/package-dmg.sh arm64
+# 输出 dist/CHMLFrp-SpeedTest-darwin-arm64.dmg
+```
+
+dmg 里是 `CHMLFrp-SpeedTest.app` 和 `Applications` 快捷方式，打开后把应用拖进去即可。
+应用未做代码签名与公证，首次启动需在「系统设置 → 隐私与安全性」里放行，或右键应用选择「打开」。
+
 ### 测试
 
 ```bash
@@ -120,7 +155,7 @@ MC_LIVE=1 go test -tags desktop,production -run TestLive -v .
 ### CI
 
 - `.github/workflows/ci.yml`：push 到 `main`/`master` 或提 PR 时自动跑 `go vet` 与 `go test`（windows-latest）。
-- `.github/workflows/release.yml`：**手动触发**时三端打包；推送 `v*` tag 时额外发布到 GitHub Release（自动更新的数据源）。
+- `.github/workflows/release.yml`：**手动触发**时三端打包；推送 `v*` tag 时额外发布到 GitHub Release（自动更新的数据源）。Linux 同时产出 zip 与 deb，macOS 同时产出 zip 与 dmg。
 
 ## 项目结构
 
@@ -166,7 +201,7 @@ MC_LIVE=1 go test -tags desktop,production -run TestLive -v .
 ├── *_test.go                # 单元测试：回环打流、frpc、节点、设置、登录态、MC 查询、更新
 ├── frontend/                # 原生 HTML/CSS/JavaScript 前端
 ├── assets/                  # 应用展示资源（logo、界面截图）
-├── build/                   # Wails 图标、平台配置与构建资源
+├── build/                   # Wails 图标、平台配置与安装包打包脚本（deb / dmg）
 └── docs/                    # GitHub Pages 站点根：首页、隐私政策与服务条款
 ```
 
