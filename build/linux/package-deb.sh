@@ -84,6 +84,6 @@ EOF
 
 mkdir -p "$outdir"
 target="$outdir/CHMLFrp-SpeedTest-linux-$arch.deb"
-# 固定用 xz：Ubuntu 的 dpkg 默认 zstd，但 Debian 12 以前的 dpkg 未必能解压 zstd。
-dpkg-deb --root-owner-group --compression=xz --build "$stage" "$target"
+# 固定用 xz：Ubuntu 的 dpkg 默认 zstd，但旧一些的 dpkg 未必能解压 zstd。
+dpkg-deb --root-owner-group -Zxz --build "$stage" "$target"
 echo "已生成: $target"
