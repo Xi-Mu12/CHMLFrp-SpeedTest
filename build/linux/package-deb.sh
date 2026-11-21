@@ -38,6 +38,9 @@ fi
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
+# mktemp 默认 700；dpkg-deb 会把根目录的权限原样写进 data.tar，
+# 安装时可能把 / 的权限改坏，所以显式改回 755。
+chmod 0755 "$stage"
 
 # 安装布局：主程序进 /usr/bin，桌面入口与图标交给桌面环境。
 install -Dm755 "$bin" "$stage/usr/bin/$pkg"
@@ -81,5 +84,6 @@ EOF
 
 mkdir -p "$outdir"
 target="$outdir/CHMLFrp-SpeedTest-linux-$arch.deb"
-dpkg-deb --root-owner-group --build "$stage" "$target"
+# 固定用 xz：Ubuntu 的 dpkg 默认 zstd，但 Debian 12 以前的 dpkg 未必能解压 zstd。
+dpkg-deb --root-owner-group --compression=xz --build "$stage" "$target"
 echo "已生成: $target"

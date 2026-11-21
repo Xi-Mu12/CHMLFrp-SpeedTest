@@ -228,6 +228,9 @@ jobs:
           bash build/linux/package-deb.sh "${{ steps.version.outputs.pkgversion }}" amd64 dist
           dpkg-deb --info dist/CHMLFrp-SpeedTest-linux-amd64.deb
           dpkg-deb --contents dist/CHMLFrp-SpeedTest-linux-amd64.deb
+          # 数据包根目录必须是 755，否则安装时可能改坏 / 的权限
+          mode="$(dpkg-deb --contents dist/CHMLFrp-SpeedTest-linux-amd64.deb | head -n1 | awk '{print $1}')"
+          [[ "$mode" == "drwxr-xr-x" ]] || { echo "deb 根目录权限异常: $mode"; exit 1; }
 
       - name: Package (macOS)
         if: matrix.os == 'macos'
@@ -237,6 +240,18 @@ jobs:
           # 安装版：dmg 里放 .app 与 Applications 快捷方式，打开后拖入即可安装
           bash build/darwin/package-dmg.sh arm64 dist
           ls -lh dist
+
+      - name: Verify dmg contents (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          mnt="$(mktemp -d)"
+          trap 'hdiutil detach "$mnt" -quiet 2>/dev/null || true' EXIT
+          hdiutil attach dist/CHMLFrp-SpeedTest-darwin-arm64.dmg -mountpoint "$mnt" -nobrowse -readonly
+          ls -la "$mnt"
+          test -d "$mnt/CHMLFrp-SpeedTest.app"
+          test -L "$mnt/Applications"
+          test -x "$mnt/CHMLFrp-SpeedTest.app/Contents/MacOS/CHMLFrp-SpeedTest"
+          hdiutil detach "$mnt"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
