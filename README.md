@@ -111,7 +111,7 @@ Linux 产物除了绿色版 zip，还可以打成 `.deb` 安装包：
 
 ```bash
 # 先按上面的方式 wails build，再执行：
-bash build/linux/package-deb.sh 1.46.0 amd64
+bash build/linux/package-deb.sh 1.47.0 amd64
 # 输出 dist/CHMLFrp-SpeedTest-linux-amd64.deb
 ```
 
