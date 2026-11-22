@@ -24,18 +24,27 @@ const maxPackageBytes = 300 << 20
 const (
 	// 分段下载参数。GitHub 资产（objects.githubusercontent.com）在国内常被单连接
 	// 限速到几百 KB/s，而带宽本身没占满；多条 Range 并发通常能把速度拉起来。
-	maxSegments   = 6
+	maxSegments   = 8
 	segmentFloor  = 2 << 20 // 小于 2MB 不分段：握手开销大于收益
 	segmentMinLen = 256 << 10
 
 	// 探测参数：每个候选源只取首块，用「首块耗时」估算吞吐，避免为了测速
 	// 把整个包拉一遍。
-	probeBytes    = 128 << 10
-	probeTimeout  = 4 * time.Second
-	fastEnoughBps = 2 << 20 // 直连就到 2MB/s 时不再探测镜像，省掉多余流量
+	probeBytes   = 128 << 10
+	probeTimeout = 2 * time.Second
+	// 直连首块达到这个速度就直接用直连，不再花时间探测镜像。
+	// 首块包含 TLS 握手与重定向，通常明显低于稳定速度，所以阈值取得比较低。
+	directGoodEnoughBps = 64 << 10
 
-	// 单个分段的尝试次数。镜像链路抖动比 GitHub 更常见，重试一次往往就够了。
-	segmentAttempts = 2
+	// 单段/单连接的尝试次数。国内链路抖动常见，多试几次比整包重下划算。
+	segmentAttempts = 3
+	streamAttempts  = 2
+	retryDelay      = 150 * time.Millisecond
+
+	// 单段/单连接的空闲上限：连接被中间设备丢弃时读操作可能永远不返回，
+	// 没有超时就会一直卡在「正在下载」。
+	segmentTimeout = 90 * time.Second
+	streamTimeout  = 10 * time.Minute
 )
 
 // mirrorPrefixes 是 GitHub Release 的加速前缀，拼接方式为「前缀 + 完整原始地址」，
@@ -45,8 +54,8 @@ const (
 // 兜底：下载结果最终仍要用 Release API 给出的 SHA256 校验，镜像替换内容无法通过校验，
 // 因此引入镜像是安全的（不可用只影响速度，不影响正确性）。
 var mirrorPrefixes = []string{
+	"https://gh-proxy.org/",
 	"https://ghfast.top/",
-	"https://gh-proxy.com/",
 	"https://ghproxy.net/",
 }
 
@@ -134,10 +143,15 @@ func probeSource(ctx context.Context, src source) (probe, error) {
 	}
 
 	// 读满探测块再停：只测到首字节会把「连接慢但带宽大」的源误判。
-	n, _ := io.CopyN(io.Discard, resp.Body, probeBytes)
+	// 2 秒内连 128KB 都读不完的源直接判失败，不要拿残缺的首块去和直连比速度——
+	// 国内不少失效镜像会一直挂着连接、偶尔吐一点数据，按部分字节算出来的速度反而会误导排序。
+	n, copyErr := io.CopyN(io.Discard, resp.Body, probeBytes)
 	elapsed := time.Since(start)
 	if n <= 0 {
 		return probe{}, errors.New("探测未收到数据")
+	}
+	if copyErr != nil && !errors.Is(copyErr, io.EOF) {
+		return probe{}, fmt.Errorf("探测超时：只收到 %d 字节", n)
 	}
 
 	out := probe{src: src, ranged: resp.StatusCode == http.StatusPartialContent}
@@ -148,6 +162,9 @@ func probeSource(ctx context.Context, src source) (probe, error) {
 	}
 	if secs := elapsed.Seconds(); secs > 0 {
 		out.bps = float64(n) / secs
+	} else {
+		// 计时精度不足（极快的本地/缓存命中）时按 1 秒计，避免算出 0 被排到最后。
+		out.bps = float64(n)
 	}
 	return out, nil
 }
@@ -169,27 +186,15 @@ func parseContentRangeTotal(v string) int64 {
 	return n
 }
 
-// planSources 决定候选的尝试顺序。
-//
-// 直连够快就只试直连；直连慢或不通时并发探测镜像（并发而非串行，避免等待时间叠加），
-// 把实测更快的排在前面。全部探测失败时仍按原顺序硬试一遍——探测失败不等于下载一定失败。
-func planSources(ctx context.Context, list []source) []probe {
+// probeAll 并发探测多个源，只返回成功的，并按首块吞吐从高到低排序。
+// 并发而非串行，避免多个失效镜像的等待时间叠加。
+func probeAll(ctx context.Context, list []source) []probe {
 	if len(list) == 0 {
 		return nil
 	}
-	head, headErr := probeSource(ctx, list[0])
-	if headErr == nil && head.bps >= fastEnoughBps {
-		return []probe{head}
-	}
-
-	found := make([]probe, 0, len(list))
-	if headErr == nil {
-		found = append(found, head)
-	}
-	rest := list[1:]
-	ch := make(chan probe, len(rest))
+	ch := make(chan probe, len(list))
 	var wg sync.WaitGroup
-	for _, src := range rest {
+	for _, src := range list {
 		wg.Add(1)
 		go func(s source) {
 			defer wg.Done()
@@ -200,25 +205,46 @@ func planSources(ctx context.Context, list []source) []probe {
 	}
 	wg.Wait()
 	close(ch)
+
+	out := make([]probe, 0, len(list))
 	for p := range ch {
-		found = append(found, p)
+		out = append(out, p)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].bps > out[j].bps })
+	return out
+}
+
+// planSources 决定候选的尝试顺序。
+//
+// 直连首块够用就直接走直连：国内直连 GitHub 虽然单连接偏慢，但分段并发能把速度拉起来，
+// 而第三方镜像经常失效，探测它们反而白白多等几秒。只有直连首块明显不行（或探测失败）
+// 时才并发探测镜像，把实测更快的排在前面。直连探测失败也不代表下载一定失败，
+// 所以始终保留它作为最后的兜底；直连真正下载失败时，Download 还会再补测一次镜像。
+func planSources(ctx context.Context, list []source) []probe {
+	if len(list) == 0 {
+		return nil
+	}
+	head, headErr := probeSource(ctx, list[0])
+	if headErr == nil && head.bps >= directGoodEnoughBps {
+		return []probe{head}
 	}
 
-	if len(found) == 0 {
-		fallback := make([]probe, 0, len(list))
-		for _, s := range list {
-			fallback = append(fallback, probe{src: s})
-		}
-		return fallback
+	found := probeAll(ctx, list[1:])
+	if headErr == nil {
+		found = append(found, head)
+		sort.SliceStable(found, func(i, j int) bool { return found[i].bps > found[j].bps })
+	} else {
+		// 直连探测失败可能只是瞬时抖动，放到最后再试一次。
+		found = append(found, probe{src: list[0]})
 	}
-	sort.SliceStable(found, func(i, j int) bool { return found[i].bps > found[j].bps })
 	return found
 }
 
 // Download 下载安装包到 dest，先写 .part，全部校验通过后才改名为正式文件。
 //
-// 流程：探测各源速度 → 选最快者 → 支持 Range 且体积够大就走并发分段，否则单连接
-// → 落盘后统一做大小与 SHA256 校验。任一源失败自动换下一个，全部失败才报错。
+// 流程：探测直连速度（够快就不折腾镜像）→ 选源 → 支持 Range 且体积够大就并发分段，
+// 否则单连接；分段失败会退回单连接 → 落盘后统一做大小与 SHA256 校验。
+// 任一源失败自动换下一个，全部失败才报错。
 // 任何失败（网络中断、取消、大小超限、摘要不符）都会删除 .part 临时文件，
 // 不会把半成品留给安装阶段。
 func Download(ctx context.Context, url, dest string, expectedSize int64, digest string, onProgress ProgressFunc) (err error) {
@@ -238,42 +264,60 @@ func Download(ctx context.Context, url, dest string, expectedSize int64, digest 
 		}
 	}()
 
-	var firstErr error
-	for _, p := range planSources(ctx, sourcesFor(url)) {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err := fetch(ctx, p, part, expectedSize, onProgress); err != nil {
+	srcs := sourcesFor(url)
+	plans := planSources(ctx, srcs)
+
+	try := func(list []probe) error {
+		var firstErr error
+		for _, p := range list {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if firstErr == nil {
-				firstErr = err
+			if err := fetch(ctx, p, part, expectedSize, onProgress); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if firstErr == nil {
+					firstErr = err
+				}
+				_ = os.Remove(part)
+				continue // 换下一个源
 			}
-			_ = os.Remove(part)
-			continue // 换下一个源
-		}
-		if err := verifyFile(part, expectedSize, digest); err != nil {
-			if firstErr == nil {
-				firstErr = err
+			if err := verifyFile(part, expectedSize, digest); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				_ = os.Remove(part)
+				continue // 镜像可能缓存了旧版本，换源还有机会
 			}
-			_ = os.Remove(part)
-			continue // 镜像可能缓存了旧版本，换源还有机会
+			return nil
 		}
-		if err := os.Rename(part, dest); err != nil {
-			return fmt.Errorf("保存安装包失败: %w", err)
+		if firstErr == nil {
+			firstErr = errors.New("没有可用的下载源")
 		}
-		if onProgress != nil {
-			if st, statErr := os.Stat(dest); statErr == nil {
-				onProgress(st.Size(), st.Size())
-			}
-		}
-		return nil
+		return firstErr
 	}
-	if firstErr == nil {
-		firstErr = errors.New("没有可用的下载源")
+
+	err = try(plans)
+	// 直连够快时 planSources 不会探测镜像；万一直连真正下载失败，再补测一次镜像兜底。
+	if err != nil && ctx.Err() == nil && len(srcs) > 1 && len(plans) == 1 && plans[0].bps >= directGoodEnoughBps {
+		if alt := probeAll(ctx, srcs[1:]); len(alt) > 0 {
+			err = try(alt)
+		}
 	}
-	return fmt.Errorf("下载失败: %w", firstErr)
+	if err != nil {
+		return fmt.Errorf("下载失败: %w", err)
+	}
+
+	if err := os.Rename(part, dest); err != nil {
+		return fmt.Errorf("保存安装包失败: %w", err)
+	}
+	if onProgress != nil {
+		if st, statErr := os.Stat(dest); statErr == nil {
+			onProgress(st.Size(), st.Size())
+		}
+	}
+	return nil
 }
 
 // fetch 从单个源把包完整拉到 part。
@@ -284,18 +328,41 @@ func fetch(ctx context.Context, p probe, part string, expectedSize int64, onProg
 	}
 	// 已知总大小、支持 Range、且体积值得分段时才并发；否则老老实实单连接。
 	if p.ranged && size >= segmentFloor && size <= maxPackageBytes {
-		err := downloadSegmented(ctx, p.src, part, size, onProgress)
-		if !errors.Is(err, errRangeUnsupported) {
-			return err
+		if err := downloadSegmented(ctx, p.src, part, size, onProgress); err == nil {
+			return nil
+		} else if ctx.Err() != nil {
+			return ctx.Err()
 		}
+		// 分段失败（并发连接被重置、服务端不支持 Range 等）退回单连接再试：
+		// 慢一点总比整包直接失败好，单连接对中间设备也更友好。
 		_ = os.Remove(part)
 	}
-	return downloadStream(ctx, p.src, part, size, onProgress)
+	// 单连接没有分段级的重试，链路抖动时补试几次，避免整包重来。
+	var err error
+	for attempt := 0; attempt < streamAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err = downloadStream(ctx, p.src, part, size, onProgress); err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt+1 < streamAttempts {
+			time.Sleep(retryDelay)
+		}
+	}
+	return err
 }
 
 // downloadStream 单连接下载，边下边报进度。
 func downloadStream(ctx context.Context, src source, part string, expected int64, onProgress ProgressFunc) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.url, nil)
+	// 单连接没有分段超时兜底，这里给整条流一个上限：连接被中间设备丢弃时，
+	// 读操作可能永远不返回，没有超时就会一直卡在「正在下载」。
+	rctx, cancel := context.WithTimeout(ctx, streamTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, src.url, nil)
 	if err != nil {
 		return fmt.Errorf("构造下载请求失败: %w", err)
 	}
@@ -306,6 +373,9 @@ func downloadStream(ctx context.Context, src source, part string, expected int64
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if rctx.Err() != nil {
+			return errors.New("下载超时（连接卡住）")
 		}
 		return fmt.Errorf("下载失败: %w", err)
 	}
@@ -354,6 +424,9 @@ func downloadStream(ctx context.Context, src source, part string, expected int64
 		if readErr != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if rctx.Err() != nil {
+				return errors.New("下载超时（连接卡住）")
 			}
 			return fmt.Errorf("下载中断: %w", readErr)
 		}
@@ -484,13 +557,23 @@ func fetchSegment(ctx context.Context, src source, f *os.File, begin, end int64,
 			atomic.AddInt64(written, -got)
 		}
 		lastErr = err
+		if attempt+1 < segmentAttempts {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(retryDelay):
+			}
+		}
 	}
 	return lastErr
 }
 
 // readSegment 下载 [begin,end] 并写入文件对应偏移，返回本次实际写入的字节数。
 func readSegment(ctx context.Context, src source, f *os.File, begin, end int64, written *int64) (int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.url, nil)
+	// 每段单独设上限：并发分段时只要有一段卡住，整个下载都会被拖住。
+	rctx, cancel := context.WithTimeout(ctx, segmentTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, src.url, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -502,6 +585,9 @@ func readSegment(ctx context.Context, src source, f *os.File, begin, end int64, 
 	if err != nil {
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
+		}
+		if rctx.Err() != nil {
+			return 0, errors.New("下载超时（连接卡住）")
 		}
 		return 0, err
 	}
@@ -537,6 +623,9 @@ func readSegment(ctx context.Context, src source, f *os.File, begin, end int64, 
 		if readErr != nil {
 			if ctx.Err() != nil {
 				return got, ctx.Err()
+			}
+			if rctx.Err() != nil {
+				return got, errors.New("下载超时（连接卡住）")
 			}
 			return got, fmt.Errorf("下载中断: %w", readErr)
 		}

@@ -327,6 +327,44 @@ func TestSourcesForMirrorsOnlyForGitHub(t *testing.T) {
 	}
 }
 
+// probeServer 起一个能稳定吐出 n 字节的服务，供探测排序测试使用。
+func probeServer(t *testing.T, n int) *httptest.Server {
+	t.Helper()
+	payload := payloadBytes(n)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestPlanSourcesSkipsMirrorsWhenDirectFast(t *testing.T) {
+	direct := probeServer(t, probeBytes*2)
+	mirror := probeServer(t, probeBytes*2)
+
+	plans := planSources(context.Background(), []source{
+		{label: "direct", url: direct.URL},
+		{label: "mirror", url: mirror.URL},
+	})
+	if len(plans) != 1 || plans[0].src.url != direct.URL {
+		t.Fatalf("直连够快时不应再探测镜像: %+v", plans)
+	}
+}
+
+func TestPlanSourcesKeepsDirectFallback(t *testing.T) {
+	mirror := probeServer(t, probeBytes*2)
+	dead := source{label: "dead", url: "http://127.0.0.1:1/unreachable"}
+
+	plans := planSources(context.Background(), []source{dead, {label: "mirror", url: mirror.URL}})
+	if len(plans) != 2 {
+		t.Fatalf("期望 1 个可用镜像 + 1 个直连兜底，实际 %+v", plans)
+	}
+	if plans[len(plans)-1].src.url != dead.url {
+		t.Fatalf("直连探测失败后仍应排在最后兜底: %+v", plans)
+	}
+}
+
 func TestDownloadSegmentsLargeFile(t *testing.T) {
 	payload := payloadBytes(3 << 20) // 超过 segmentFloor，应触发分段
 	srv, rangeCount := rangeServer(t, payload, rangeOK)
