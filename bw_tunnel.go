@@ -11,6 +11,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -64,12 +65,18 @@ type tunnelListResp struct {
 
 var chmlHTTPClient = &http.Client{Timeout: 20 * time.Second}
 
-func chmlDo(method, path, token string, body []byte) ([]byte, error) {
+// chmlDo 发一次 CHMLFrp 接口请求。
+// ctx 必须贯穿到 http.Request：否则用户点「取消」或退出程序时，在途请求
+// 还要把 client 的 20 秒超时走完，界面和退出流程都会跟着卡住。
+func chmlDo(ctx context.Context, method, path, token string, body []byte) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, ApiBase+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, ApiBase+path, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +89,10 @@ func chmlDo(method, path, token string, body []byte) ([]byte, error) {
 	}
 	resp, err := chmlHTTPClient.Do(req)
 	if err != nil {
+		// 区分「被取消」与「网络故障」：前者是预期内的，调用方不应记成错误日志
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("请求已取消: %w", ctxErr)
+		}
 		return nil, fmt.Errorf("请求 CHMLFrp 接口失败: %w", err)
 	}
 	defer resp.Body.Close()
@@ -126,11 +137,11 @@ func checkEnvelope(raw []byte) error {
 }
 
 // ListTunnels 拉取账号下全部隧道
-func ListTunnels(token string) ([]TunnelAPI, error) {
+func ListTunnels(ctx context.Context, token string) ([]TunnelAPI, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("未登录")
 	}
-	raw, err := chmlDo(http.MethodGet, "/tunnel", token, nil)
+	raw, err := chmlDo(ctx, http.MethodGet, "/tunnel", token, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +160,7 @@ func ListTunnels(token string) ([]TunnelAPI, error) {
 }
 
 // CreateTunnelAPI 创建一条隧道
-func CreateTunnelAPI(token string, p CreateTunnelParams) error {
+func CreateTunnelAPI(ctx context.Context, token string, p CreateTunnelParams) error {
 	if strings.TrimSpace(token) == "" {
 		return fmt.Errorf("未登录")
 	}
@@ -157,7 +168,7 @@ func CreateTunnelAPI(token string, p CreateTunnelParams) error {
 	if err != nil {
 		return err
 	}
-	raw, err := chmlDo(http.MethodPost, "/create_tunnel", token, body)
+	raw, err := chmlDo(ctx, http.MethodPost, "/create_tunnel", token, body)
 	if err != nil {
 		return err
 	}
@@ -165,11 +176,11 @@ func CreateTunnelAPI(token string, p CreateTunnelParams) error {
 }
 
 // DeleteTunnelAPI 删除一条隧道
-func DeleteTunnelAPI(token string, id int) error {
+func DeleteTunnelAPI(ctx context.Context, token string, id int) error {
 	if id <= 0 {
 		return fmt.Errorf("隧道 id 无效")
 	}
-	raw, err := chmlDo(http.MethodGet, fmt.Sprintf("/delete_tunnel?tunnelid=%d", id), token, nil)
+	raw, err := chmlDo(ctx, http.MethodGet, fmt.Sprintf("/delete_tunnel?tunnelid=%d", id), token, nil)
 	if err != nil {
 		return err
 	}
@@ -177,8 +188,8 @@ func DeleteTunnelAPI(token string, id int) error {
 }
 
 // findTunnelByName 在账号隧道里按名字查找（创建接口不返回 id，只能回查）
-func findTunnelByName(token, name string) *TunnelAPI {
-	list, err := ListTunnels(token)
+func findTunnelByName(ctx context.Context, token, name string) *TunnelAPI {
+	list, err := ListTunnels(ctx, token)
 	if err != nil {
 		return nil
 	}
@@ -190,15 +201,20 @@ func findTunnelByName(token, name string) *TunnelAPI {
 	return nil
 }
 
-// waitTunnelByName 轮询等待新隧道出现在列表里，返回完整记录
-func waitTunnelByName(token, name string, timeout time.Duration, cancelled func() bool) (*TunnelAPI, error) {
+// waitTunnelByName 轮询等待新隧道出现在列表里，返回完整记录。
+// 取消由 ctx 表达（不再是回调）：请求在途时 ctx 一取消就立刻返回，
+// 不必等这次 HTTP 把 20 秒超时走完。
+func waitTunnelByName(ctx context.Context, token, name string, timeout time.Duration) (*TunnelAPI, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
-		if cancelled != nil && cancelled() {
+		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("已取消")
 		}
-		if tun := findTunnelByName(token, name); tun != nil {
+		if tun := findTunnelByName(ctx, token, name); tun != nil {
 			return tun, nil
 		}
 		if time.Now().After(deadline) {
@@ -207,7 +223,11 @@ func waitTunnelByName(token, name string, timeout time.Duration, cancelled func(
 			}
 			return nil, fmt.Errorf("等待隧道出现超时")
 		}
-		time.Sleep(600 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("已取消")
+		case <-time.After(600 * time.Millisecond):
+		}
 	}
 }
 

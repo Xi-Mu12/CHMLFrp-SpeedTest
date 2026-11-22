@@ -20,6 +20,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/rand"
@@ -43,6 +44,12 @@ const (
 	bwDialTimeout  = 8 * time.Second
 	bwTunnelWait   = 15 * time.Second
 	bwFrpcReady    = 25 * time.Second
+	// 退出时等待测速协程收尾的上限：正常取消后 1 秒内就该结束，
+	// 留 3 秒兜住「刚好处在 HTTP 请求里」的情况，再久就是在牺牲退出体验了。
+	bwCleanupWait = 3 * time.Second
+	// 单条隧道删除的总预算（含重试）：退出流程只等 3 秒，
+	// 所以这里必须显著短于「3 次 × 20 秒 HTTP 超时」的旧行为。
+	bwDeleteBudget = 4 * time.Second
 )
 
 // SpeedNodeDone 单节点测速结果（失败时 Error 非空，其余字段为 0）
@@ -129,17 +136,22 @@ func (a *App) StartSpeedTest(seconds, parallel int, ids []int) {
 	runID := atomic.AddInt64(&a.speedRun, 1)
 	a.bwFinished = make(chan struct{})
 	finished := a.bwFinished
+	// 每轮测速一个可取消的 ctx：取消/退出时立刻打断在途的隧道 API 请求
+	// 和 frpc 就绪等待，而不是把各自的 20s/25s 超时走完。
+	ctx, cancel := context.WithCancel(context.Background())
+	a.bwCancel = cancel
 	a.bwMu.Unlock()
 	atomic.StoreInt32(&a.speedPaused, 0)
 	go func() {
 		defer close(finished)
 		defer atomic.StoreInt32(&a.bwBusy, 0)
-		a.runBandwidthTest(runID, seconds, parallel, ids)
+		defer cancel() // 正常跑完也释放，避免 ctx 泄漏
+		a.runBandwidthTest(ctx, runID, seconds, parallel, ids)
 	}()
 }
 
 // runBandwidthTest 整轮流程：登录校验 → 准备 frpc → 逐节点测速 → 汇总
-func (a *App) runBandwidthTest(runID int64, seconds, parallel int, ids []int) {
+func (a *App) runBandwidthTest(ctx context.Context, runID int64, seconds, parallel int, ids []int) {
 	fail := func(msg string) {
 		a.emitSpeedLog("err", msg)
 		if a.ctx != nil {
@@ -248,7 +260,7 @@ func (a *App) runBandwidthTest(runID int64, seconds, parallel int, ids []int) {
 				a.bwActive++
 				a.emitRunProgressLocked()
 				a.bwMu.Unlock()
-				res := a.testNodeBandwidth(runID, taskToken, user.UserToken, frpcBin, srv, sel[i], i, len(sel), seconds, parallel)
+				res := a.testNodeBandwidth(ctx, runID, taskToken, user.UserToken, frpcBin, srv, sel[i], i, len(sel), seconds, parallel)
 				resultMu.Lock()
 				done = append(done, res)
 				resultMu.Unlock()
@@ -341,7 +353,7 @@ func pickRemotePort(minPort, maxPort, attempt int) int {
 }
 
 // testNodeBandwidth 单节点：建隧道 → 起 frpc → 测延迟 → 打流 → 清理
-func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, srv *bwServer, node NodeBasic, idx, total, seconds, parallel int) SpeedNodeDone {
+func (a *App) testNodeBandwidth(ctx context.Context, runID int64, token, userToken, frpcBin string, srv *bwServer, node NodeBasic, idx, total, seconds, parallel int) SpeedNodeDone {
 	res := SpeedNodeDone{ID: node.ID, Name: node.Name, Seconds: seconds}
 	proxyName := bwTunnelName(node.ID)
 
@@ -375,7 +387,7 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 				}
 			}
 		} else if created {
-			if t := findTunnelByName(token, proxyName); t != nil {
+			if t := findTunnelByName(ctx, token, proxyName); t != nil {
 				if !a.deleteTunnelWithRetry(token, t.ID) {
 					atomic.CompareAndSwapInt64(&a.speedRun, runID, runID+1)
 				}
@@ -418,7 +430,7 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 			}
 			attempt++
 			remotePort := pickRemotePort(portMin, portMax, attempt)
-			err := CreateTunnelAPI(token, CreateTunnelParams{
+			err := CreateTunnelAPI(ctx, token, CreateTunnelParams{
 				TunnelName: proxyName,
 				Node:       node.Name,
 				LocalIP:    "127.0.0.1",
@@ -445,7 +457,7 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 			time.Sleep(500 * time.Millisecond)
 		}
 
-		tun, err = waitTunnelByName(token, proxyName, bwTunnelWait, func() bool { return a.speedCancelled(runID) })
+		tun, err = waitTunnelByName(ctx, token, proxyName, bwTunnelWait)
 		if err != nil {
 			res.Error = err.Error()
 			return res
@@ -509,7 +521,7 @@ func (a *App) testNodeBandwidth(runID int64, token, userToken, frpcBin string, s
 		}
 		a.trackBWResource(proc, tun.ID, token)
 		tracked = true
-		if err := proc.WaitReady(bwFrpcReady); err != nil {
+		if err := proc.WaitReady(ctx, bwFrpcReady); err != nil {
 			// frps 报端口被占：这个隧道建得成但绑不上，清掉后换个端口重来。
 			if portTry < maxPortTries && isPortConflictErr(err) {
 				a.emitSpeedLog("warn", fmt.Sprintf("#%d %s 远程端口 %s 已被占用，换端口重试（第 %d/%d 次）",
@@ -802,13 +814,24 @@ func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string,
 	return res, false, nil
 }
 
-// deleteTunnelWithRetry 删除临时隧道，失败重试几次（frpc 刚杀，服务端状态可能滞后）
+// deleteTunnelWithRetry 删除临时隧道，失败重试几次（frpc 刚杀，服务端状态可能滞后）。
+// 这里刻意用独立的短超时 ctx，而不是测速轮的 ctx：调用它时往往正是
+// 「用户取消 / 程序退出」，挂在已取消的 ctx 上会一次都删不掉，
+// 反而把隧道漏在服务端继续占配额。
 func (a *App) deleteTunnelWithRetry(token string, id int) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), bwDeleteBudget)
+	defer cancel()
 	for i := 0; i < 3; i++ {
-		if err := DeleteTunnelAPI(token, id); err == nil {
+		if err := DeleteTunnelAPI(ctx, token, id); err == nil {
 			return true
 		}
-		time.Sleep(700 * time.Millisecond)
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(700 * time.Millisecond):
+		}
 	}
 	a.emitSpeedLog("warn", fmt.Sprintf("临时隧道 #%d 删除失败，请到面板手动删除", id))
 	return false
@@ -837,22 +860,54 @@ type bwResource struct {
 	token    string
 }
 
-// CleanupBandwidth 供退出流程调用：杀 frpc + 删除临时隧道
+// CleanupBandwidth 供退出流程调用：取消在途请求 → 杀 frpc → 等测速协程收尾。
+// 幂等：QuitApp 与 OnShutdown 都会调用它，只做一次，避免重复等超时。
 func (a *App) CleanupBandwidth() {
+	a.bwCleanupOnce.Do(a.cleanupBandwidthOnce)
+}
+
+// cleanupBandwidthOnce 的实际逻辑。
+//
+// 等待必须带超时：worker 可能正卡在隧道 API（HTTP 20s）或 frpc 就绪等待（25s）上，
+// 裸 `<-finished` 会让「退出」卡到一分钟以上（外观就是假死、再次双击图标也被
+// 单实例锁挡掉）。超时后把还没确认删除的隧道写进补偿文件，下次启动补删。
+func (a *App) cleanupBandwidthOnce() {
 	a.bwMu.Lock()
 	atomic.AddInt64(&a.speedRun, 1)
+	cancel := a.bwCancel
 	resources := make([]bwResource, 0, len(a.bwResources))
 	for _, resource := range a.bwResources {
 		resources = append(resources, resource)
 	}
 	finished := a.bwFinished
 	a.bwMu.Unlock()
+
+	// 先取消：在途的 HTTP 请求与 WaitReady 会立刻返回，worker 才有机会跑自己的清理 defer
+	if cancel != nil {
+		cancel()
+	}
 	for _, resource := range resources {
 		if resource.proc != nil {
 			resource.proc.Stop()
 		}
 	}
-	if finished != nil {
-		<-finished
+	if finished == nil {
+		return
+	}
+	select {
+	case <-finished:
+		return
+	case <-time.After(bwCleanupWait):
+	}
+
+	// 超时：bwResources 里剩下的就是「删除还没确认」的隧道，记下来下次启动补删
+	a.bwMu.Lock()
+	pending := make([]int, 0, len(a.bwResources))
+	for id := range a.bwResources {
+		pending = append(pending, id)
+	}
+	a.bwMu.Unlock()
+	if len(pending) > 0 {
+		a.recordPendingTunnels(pending)
 	}
 }

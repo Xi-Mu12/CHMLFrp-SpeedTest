@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -625,13 +626,20 @@ func startFrpcProc(bin, iniPath string) (*frpcProc, error) {
 }
 
 // WaitReady 等日志里出现 start proxy success。
-// 命中失败模式立即返回错误，超时或进程提前退出也返回错误。
-func (p *frpcProc) WaitReady(timeout time.Duration) error {
+// 命中失败模式立即返回错误，超时、进程提前退出或 ctx 取消也返回错误。
+// 必须监听 ctx：用户点「取消」时如果只是杀 frpc 之外的路径，这里会一直
+// 等到 25 秒超时才返回，界面就显示成「卡住」。
+func (p *frpcProc) WaitReady(ctx context.Context, timeout time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	var tail string // 记录最后几条日志，方便报错
 	for {
 		select {
+		case <-ctx.Done():
+			return fmt.Errorf("已取消")
 		case line, ok := <-p.lines:
 			if !ok {
 				if tail == "" {
@@ -674,6 +682,9 @@ func (p *frpcProc) Stop() {
 	}
 	p.stopOnce.Do(func() {
 		_ = p.cmd.Process.Kill()
-		_, _ = p.cmd.Process.Wait()
+		// 必须走 cmd.Wait 而不是 Process.Wait：只有 cmd.Wait 会关闭
+		// StdoutPipe/StderrPipe 的父端读句柄，Process.Wait 只回收进程，
+		// 于是每轮测速漏 2 个 fd，长期跑只能等 GC 兜底。
+		_ = p.cmd.Wait()
 	})
 }

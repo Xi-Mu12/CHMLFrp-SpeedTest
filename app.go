@@ -43,6 +43,11 @@ type App struct {
 	bwActive    int
 	bwCompleted int
 	bwFinished  chan struct{}
+	// 本轮测速的取消句柄：取消/退出时打断在途的隧道 API 请求与 frpc 就绪等待
+	bwCancel context.CancelFunc
+	// 退出清理只做一次：QuitApp 与 OnShutdown 都会调 CleanupBandwidth，
+	// 不做幂等就会白等两遍超时（3s + 3s）
+	bwCleanupOnce sync.Once
 
 	// 自动更新：状态机与下载暂存目录。updateBusy 防止检查/下载并发进入。
 	updateMu     sync.Mutex
@@ -146,10 +151,18 @@ type SpeedNodeProgressEvent struct {
 	Progress float64 `json:"progress"`
 }
 
-// CancelSpeedTest 取消当前测速
+// CancelSpeedTest 取消当前带宽测速。
+// 除了翻轮次 id，还要取消 ctx：否则 worker 若正卡在隧道 API 请求（HTTP 20s）
+// 或 frpc 就绪等待（25s）里，要等到超时才会发现自己已经不该干活了。
 func (a *App) CancelSpeedTest() {
 	atomic.AddInt64(&a.speedRun, 1)
 	atomic.StoreInt32(&a.speedPaused, 0)
+	a.bwMu.Lock()
+	cancel := a.bwCancel
+	a.bwMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // PauseSpeedTest 暂停当前测速任务（不取消）
