@@ -696,6 +696,10 @@ func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string,
 	started := time.Now()
 	var pausedFor time.Duration
 	var lastBytes int64
+	// 瞬时速率的分母必须是「距上次采样真实经过了多久」。
+	// Sleep 只保证睡够，实际间隔总比常量长（GC、调度抖动），
+	// 用常量 100ms 做分母会把每条采样都算快一点，峰值与曲线随之虚高。
+	lastTick := started
 	// measuredFrom < 0 表示还没跨过预热；跨过时定格当时的字节数作为平均值基线
 	var measuredFrom int64 = -1
 
@@ -714,6 +718,10 @@ func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string,
 				time.Sleep(bwTickInterval)
 			}
 			pausedFor += time.Since(pStart)
+			// 暂停期间没有新字节流入：恢复后重置采样基线，
+			// 否则这一拍会拿「暂停前攒下的字节 / 一拍时间」算出一个假峰值。
+			lastBytes = atomic.LoadInt64(&bytes)
+			lastTick = time.Now()
 			continue
 		}
 		elapsed := time.Since(started) - pausedFor
@@ -734,7 +742,14 @@ func (a *App) runPhase(runID int64, node NodeBasic, idx, total int, mode string,
 		if measuredFrom < 0 && elapsed >= warmup {
 			measuredFrom = cur
 		}
-		instant := float64(cur-lastBytes) * 8 / 1e6 / bwTickInterval.Seconds()
+		// 用真实间隔做分母；间隔异常（<=0）时退回标称 tick，避免除零
+		tickAt := time.Now()
+		tickDur := tickAt.Sub(lastTick)
+		lastTick = tickAt
+		if tickDur <= 0 {
+			tickDur = bwTickInterval
+		}
+		instant := float64(cur-lastBytes) * 8 / 1e6 / tickDur.Seconds()
 		lastBytes = cur
 		if instant < 0 {
 			instant = 0
