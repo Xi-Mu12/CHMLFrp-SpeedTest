@@ -36,6 +36,9 @@ const (
 	defaultDevicePollInterval = 5
 	maxDevicePollInterval     = 30
 	defaultDeviceExpiry       = 600
+	// 轮询期间允许的连续网络错误次数。设备码有效期 600 秒，
+	// 5 次 × 5 秒只有 25 秒，抖一下能自愈，真断网也不会一直静默等到过期。
+	maxDevicePollNetFails = 5
 )
 
 type qzhuaOIDCConfig struct {
@@ -235,6 +238,7 @@ func (a *App) CancelQZhuaLogin() {
 // 与官方启动器一致：拿到设备码后立即发起首次轮询，之后按 interval 间隔重试。
 func (a *App) pollQZhuaDeviceToken(ctx context.Context, cancel context.CancelFunc, client *http.Client, config qzhuaOIDCConfig, clientID, deviceCode string, interval int) {
 	defer cancel()
+	netFails := 0 // 连续网络错误次数，成功拿到 pending/slow_down 就清零
 	for first := true; ; first = false {
 		if !first {
 			select {
@@ -247,13 +251,35 @@ func (a *App) pollQZhuaDeviceToken(ctx context.Context, cancel context.CancelFun
 		token, status, err := pollQZhuaDeviceTokenOnce(ctx, client, config, clientID, deviceCode)
 		switch status {
 		case "pending":
+			netFails = 0
 			continue
 		case "slow_down":
+			netFails = 0
 			// 服务端要求放慢轮询，间隔递增（封顶 maxDevicePollInterval）。
 			if interval < maxDevicePollInterval {
 				interval += 5
 			}
 			continue
+		case "net":
+			// 一次超时/拒连不代表授权失败，但也不能无限静默重试：
+			// 以前这里当成 pending 处理，断网时会一直等到设备码过期才报「已过期」。
+			netFails++
+			if ctx.Err() != nil {
+				a.emitDevicePollStop(ctx)
+				return
+			}
+			if netFails < maxDevicePollNetFails {
+				continue
+			}
+			detail := "网络请求失败"
+			if err != nil {
+				detail = err.Error()
+			}
+			a.emitAuth(qzhuaAuthEvent{
+				Status: "error",
+				Error:  fmt.Sprintf("连续 %d 次连接授权服务器失败，请检查网络后重新登录（%s）", netFails, detail),
+			})
+			return
 		}
 		if err != nil {
 			a.emitAuth(qzhuaAuthEvent{Status: "error", Error: err.Error()})
@@ -274,7 +300,8 @@ func (a *App) emitDevicePollStop(ctx context.Context) {
 }
 
 // pollQZhuaDeviceTokenOnce 发起一次设备码换令牌请求。
-// 返回 (令牌, 状态, 错误)：状态为 pending / slow_down 时错误为 nil，需继续轮询。
+// 返回 (令牌, 状态, 错误)：状态为 pending / slow_down / net 时需继续轮询，
+// 其中 net 表示这次请求没连上（错误非 nil），由调用方决定重试几次。
 func pollQZhuaDeviceTokenOnce(ctx context.Context, client *http.Client, config qzhuaOIDCConfig, clientID, deviceCode string) (qzhuaToken, string, error) {
 	var token qzhuaToken
 	form := url.Values{
@@ -289,8 +316,11 @@ func pollQZhuaDeviceTokenOnce(ctx context.Context, client *http.Client, config q
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := client.Do(req)
 	if err != nil {
-		// 网络抖动不算致命，按未授权处理继续轮询。
-		return token, "pending", nil
+		if ctx.Err() != nil {
+			return token, "", ctx.Err()
+		}
+		// 网络抖动不算致命：交给调用方计数，连续失败太多次才报错。
+		return token, "net", fmt.Errorf("连接授权服务器失败: %w", err)
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 	resp.Body.Close()
@@ -384,6 +414,8 @@ func (a *App) applyLogin(ctx context.Context, client *http.Client, userinfoEndpo
 		APIError: apiError,
 		Profile:  profile,
 	})
+	// 上次退出时可能有临时隧道没删完（见 bw_pending.go），拿到 token 后补删
+	go a.flushPendingTunnels()
 }
 
 func fetchQZhuaUser(ctx context.Context, client *http.Client, endpoint, accessToken string) (qzhuaUser, error) {
@@ -701,5 +733,7 @@ func (a *App) RestoreSession() SessionState {
 		RefreshToken: sess.RefreshToken,
 		ExpiresIn:    expiresIn,
 	})
+	// 上次退出时没删完的临时隧道在这里补删（applyLogin 内部已把 token 装回去）
+	go a.flushPendingTunnels()
 	return a.sessionState()
 }
