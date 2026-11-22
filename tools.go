@@ -24,7 +24,7 @@ type LocalIP struct {
 	Private  bool   `json:"private"`  // 内网地址（RFC1918 / CGNAT / 链路本地）
 }
 
-// isPrivateIPv4 判断是否内网/保留地址。IPv6 只做回环与链路本地区分。
+// isPrivateIPv4 判断是否内网/保留地址（仅 IPv4）。
 func isPrivateIPv4(ip net.IP) bool {
 	v4 := ip.To4()
 	if v4 == nil {
@@ -46,6 +46,20 @@ func isPrivateIPv4(ip net.IP) bool {
 		return true
 	}
 	return false
+}
+
+// isPrivateIP 按协议族判断内网地址。
+// IPv4 走 isPrivateIPv4（含 CGNAT，IsPrivate 不覆盖它）；
+// IPv6 的 ULA(fc00::/7) 等价于 IPv4 私网，同样没有公网归属地，
+// 漏判会让人以为能查它的地理位置，实际只会拿到一条查询失败。
+func isPrivateIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.To4() != nil {
+		return isPrivateIPv4(ip)
+	}
+	return ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 // GetLocalIPs 枚举所有已启用网卡的 IP 地址。
@@ -89,7 +103,7 @@ func (a *App) GetLocalIPs() ([]LocalIP, error) {
 				IP:       ip.String(),
 				Version:  version,
 				Loopback: ip.IsLoopback(),
-				Private:  isPrivateIPv4(ip),
+				Private:  isPrivateIP(ip),
 			})
 		}
 	}
@@ -313,7 +327,7 @@ func (a *App) QueryIPInfo(ip string) (IPGeo, error) {
 	if parsed == nil {
 		return IPGeo{}, fmt.Errorf("IP 格式不正确：%s", ip)
 	}
-	if parsed.IsLoopback() || (parsed.To4() != nil && isPrivateIPv4(parsed)) {
+	if parsed.IsLoopback() || isPrivateIP(parsed) {
 		return IPGeo{}, fmt.Errorf("%s 是内网/回环地址，没有公网归属地信息", ip)
 	}
 	// 注意不能带尾斜杠：ipwho.is 会把 "1.2.3.4/" 当成非法查询串
