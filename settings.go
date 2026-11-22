@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -150,11 +151,12 @@ func (a *App) loadSettings() {
 
 	settingsMu.Lock()
 	appSettings = next
-	settingsMu.Unlock()
 	if needSave {
 		// 迁移结果立即落盘，之后不再依赖旧 prefs.json。
+		// 与改内存同锁，避免与首次 SaveSettings 交错时把迁移结果丢掉。
 		_ = saveSettings(next)
 	}
+	settingsMu.Unlock()
 }
 
 func saveSettings(s AppSettings) error {
@@ -166,7 +168,7 @@ func saveSettings(s AppSettings) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
+	tmp := fmt.Sprintf("%s.%d-%d.tmp", path, os.Getpid(), time.Now().UnixNano())
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return fmt.Errorf("写入配置失败: %w", err)
 	}
@@ -183,13 +185,20 @@ func saveSettings(s AppSettings) error {
 
 // mutateSettings 只修改指定字段并落盘，避免整结构体覆盖。
 // 更新偏好（跳过版本、最近检查时间）走这里，不经过前端传来的 SaveSettings。
+//
+// 「改内存 + 落盘」必须在同一把锁内完成：否则下面 SaveSettings 会拿着更早
+// 取到的快照把这里刚写进去的偏好覆盖掉（反过来也一样），且两者共用同一个
+// 临时文件名时还可能互相截断。
 func (a *App) mutateSettings(fn func(*AppSettings)) error {
 	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	s := appSettings
 	fn(&s)
+	if err := saveSettings(s); err != nil {
+		return err
+	}
 	appSettings = s
-	settingsMu.Unlock()
-	return saveSettings(s)
+	return nil
 }
 
 // GetSettings 返回当前配置快照。
@@ -213,22 +222,24 @@ func (a *App) SaveSettings(s AppSettings) (AppSettings, error) {
 	if s.CloseAction != "" && action == "" {
 		return AppSettings{}, fmt.Errorf("不支持的关闭行为: %q", s.CloseAction)
 	}
+
+	// 读-改-写整段持锁。锁内直接读 appSettings，不能再用 GetSettings()：
+	// 那是锁外快照，正是「用旧值覆盖 mutateSettings 刚写的偏好」的来源。
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
 	if action == "" {
 		// 前端只改测速参数时不要把已保存的关闭行为清空。
-		action = a.GetSettings().CloseAction
+		action = normalizeCloseAction(appSettings.CloseAction)
 	}
 	s.CloseAction = action
 	// 更新偏好由独立接口维护；前端保存测速参数时整体覆盖结构体会把它们清空。
-	cur := a.GetSettings()
-	s.DisableAutoUpdate = cur.DisableAutoUpdate
-	s.SkippedVersion = cur.SkippedVersion
-	s.LastUpdateCheck = cur.LastUpdateCheck
+	s.DisableAutoUpdate = appSettings.DisableAutoUpdate
+	s.SkippedVersion = appSettings.SkippedVersion
+	s.LastUpdateCheck = appSettings.LastUpdateCheck
 	if err := saveSettings(s); err != nil {
 		return AppSettings{}, err
 	}
-	settingsMu.Lock()
 	appSettings = s
-	settingsMu.Unlock()
 	return s, nil
 }
 
