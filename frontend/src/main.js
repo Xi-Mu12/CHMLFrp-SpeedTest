@@ -1,14 +1,34 @@
 import './style.css';
 import { ManageFrpcCache, IsFrpcReady, PrepareFrpc } from '../wailsjs/go/main/App';
 import { GetNodes, StartPrefer, CancelPrefer, SaveCSV, SaveImage, StartSpeedTest, CancelSpeedTest, PauseSpeedTest, ResumeSpeedTest, GetAutostart, SetAutostart, HideToTray, QuitApp, GetLocalIPs, GetMyIPInfo, QueryIPInfo, RequestClose, SetCloseAction, GetSettings, SaveSettings, AppendRunLog, ExportRunLog, GetRunLogPath } from '../wailsjs/go/main/App';
-import { EventsOn, WindowMinimise, WindowToggleMaximise, WindowGetPosition, WindowSetPosition, BrowserOpenURL } from '../wailsjs/runtime/runtime';
+import { EventsOn, WindowMinimise, WindowToggleMaximise, WindowGetPosition, WindowSetPosition, BrowserOpenURL } from '../wailsjs/runtime';
 import { StartQZhuaLogin, LogoutQZhua, CancelQZhuaLogin, RestoreSession, SetRememberLogin } from '../wailsjs/go/main/App';
 import { CheckForUpdate, StartUpdateDownload, CancelUpdateDownload, InstallUpdateAndRestart, SkipUpdateVersion, GetUpdatePrefs, GetUpdateState, SetAutoUpdateCheck } from '../wailsjs/go/main/App';
 import { PingMCServer } from '../wailsjs/go/main/App';
 
 const $ = (id) => document.getElementById(id);
 
-EventsOn('frpcSecurityNotice', (ev) => {
+// ---------- 后端事件登记表 ----------
+// Wails 的 EventsOn 不会自动回收：页面里注册的回调会一直挂在运行时上。
+// 这里统一登记解绑函数，退出前一次性注销，避免回调继续操作已销毁的 DOM。
+const appEventUnsubs = [];
+const adObservers = [];
+
+function onAppEvent(name, handler) {
+    const off = EventsOn(name, handler);
+    if (typeof off === 'function') appEventUnsubs.push(off);
+    return off;
+}
+
+function disposeAppEvents() {
+    while (appEventUnsubs.length) {
+        try { appEventUnsubs.pop()(); } catch { /* 解绑失败不该阻塞退出 */ }
+    }
+    adObservers.forEach((observer) => observer.disconnect());
+    adObservers.length = 0;
+}
+
+onAppEvent('frpcSecurityNotice', (ev) => {
     $('frpcSecurityTitle').textContent = `${ev.stage || 'frpc'}：文件访问受阻`;
     $('frpcSecurityMessage').textContent = ev.message || '请查看 Windows 安全中心的保护历史。';
     $('frpcSecurityPath').textContent = ev.path || '无法确定路径';
@@ -42,6 +62,15 @@ function setTestButtonState(btn, label, loading, testing = false) {
 const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ESC_MAP[ch]);
 
+// 搜索框逐字触发全量重建太浪费：按键停 150ms 再渲染，输入时的手感不受影响。
+function debounce(fn, ms = 150) {
+    let timer = 0;
+    return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), ms);
+    };
+}
+
 // 弹窗必须位于页面根部，才能越过内容区的层叠上下文并遮住标题栏和侧栏。
 document.querySelectorAll('.bandwidth-modal').forEach((modal) => document.body.append(modal));
 
@@ -54,9 +83,43 @@ const clampInt = (value, min, max, fallback) => {
     if (!Number.isFinite(n)) return Math.min(max, Math.max(min, fallback));
     return Math.min(max, Math.max(min, n));
 };
+// ---------- localStorage 安全读写 ----------
+// 本地缓存属于不可信输入：手动改坏、旧版本残留、隐私模式都可能让读取抛异常。
+// 这段代码在初始化阶段执行，一旦抛错整个 main.js 都不会继续加载，所以统一兜底。
+const readStorage = (key) => {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+};
+const writeStorage = (key, value) => {
+    try {
+        localStorage.setItem(key, value);
+    } catch { /* 隐私模式/配额满：写不进去就算了 */ }
+};
+const removeStorage = (key) => {
+    try {
+        localStorage.removeItem(key);
+    } catch { /* 同上 */ }
+};
+const readStorageJson = (key, fallback = null) => {
+    const raw = readStorage(key);
+    if (!raw) return fallback;
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return fallback;
+    }
+};
+const readStorageArray = (key) => {
+    const value = readStorageJson(key, []);
+    return Array.isArray(value) ? value : [];
+};
+
 // 已选卡片（多选，点击卡片切换，全选按钮批量，持久化）
-const selected = new Set(JSON.parse(localStorage.getItem('pickedNodeIds') || '[]'));
-const saveSel = () => localStorage.setItem('pickedNodeIds', JSON.stringify([...selected]));
+const selected = new Set(readStorageArray('pickedNodeIds').map(String));
+const saveSel = () => writeStorage('pickedNodeIds', JSON.stringify([...selected]));
 const bandwidthResults = new Map();
 
 // ---------- 导航 ----------
@@ -66,6 +129,8 @@ document.querySelectorAll('.nav-item').forEach((btn) => {
         btn.classList.add('active');
         document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
         $('view-' + btn.dataset.view).classList.add('active');
+        // 隐藏期间攒下的变更在这里一次性补建
+        if (btn.dataset.view === 'bandwidth' && bandwidthGroupsDirty) buildBandwidthGroups();
         if (btn.dataset.view === 'tools') ensureToolsLoaded();
         if (btn.dataset.view === 'mc') $('mcAddress').focus();
     });
@@ -91,7 +156,7 @@ async function initSettings() {
     if (!s) s = { testSeconds: 10, bwParallel: 6, bwTunnelConcurrency: 2, closeAction: '' };
     if (!s.closeAction) {
         // 从 A 组版本的 localStorage 迁移一次；迁移后以 Go settings.json 为准。
-        s.closeAction = localStorage.getItem('closeAction') === 'tray' ? 'tray' : 'ask';
+        s.closeAction = readStorage('closeAction') === 'tray' ? 'tray' : 'ask';
         try {
             await SaveSettings({
                 testSeconds: clampInt(s.testSeconds, 5, 30, 10),
@@ -100,7 +165,7 @@ async function initSettings() {
                 closeAction: s.closeAction,
             });
         } catch { /* 保存失败也不阻塞启动 */ }
-        localStorage.removeItem('closeAction');
+        removeStorage('closeAction');
     }
     settings.testSeconds = clampInt(s.testSeconds, 5, 30, 10);
     settings.bwParallel = clampInt(s.bwParallel, 1, 8, 6);
@@ -132,7 +197,7 @@ async function saveTestSettings() {
     }
 }
 $('tbClose').addEventListener('click', () => { RequestClose(); });
-EventsOn('closeRequested', () => {
+onAppEvent('closeRequested', () => {
     // Go 侧判断为“询问”时才会发这个事件；窗口已被拦住，不会退出。
     $('closeAskModal').classList.remove('hidden');
 });
@@ -143,6 +208,7 @@ $('closeAskTray').addEventListener('click', async () => {
 });
 $('closeAskExit').addEventListener('click', () => {
     $('closeAskModal').classList.add('hidden');
+    disposeAppEvents();
     QuitApp();
 });
 $('closeAskBackdrop').addEventListener('click', () => $('closeAskModal').classList.add('hidden'));
@@ -185,7 +251,7 @@ frpcSettings.innerHTML = `<div class="settings-group-head">frpc 测速组件</di
     </div>`;
 document.querySelector('#view-settings .settings-list').append(frpcSettings);
 let frpcCacheBusy = false;
-EventsOn('frpcCacheProgress', (ev) => {
+onAppEvent('frpcCacheProgress', (ev) => {
     if (!frpcCacheBusy) return;
     $('frpcCacheStatus').textContent = ev.message || '正在下载 frpc…';
     $('frpcCacheProgress').value = ev.progress || 0;
@@ -257,6 +323,9 @@ $('confirmFrpcDownload').addEventListener('click', async () => {
 });
 
 let qzhuaLoggedIn = false;
+// 节点请求版本号：退出登录、重新登录、连续刷新都会递增，
+// 在途的旧请求返回后据此丢弃，避免旧账号的数据写回界面。
+let nodeLoadVersion = 0;
 let loginVerifyUrl = '';
 
 const setText = (id, value, fallback = '—') => {
@@ -305,7 +374,7 @@ const closeLoginModal = (cancelLogin) => {
     if (cancelLogin) CancelQZhuaLogin().catch(() => {});
 };
 
-EventsOn('qzhuaAuth', (event) => {
+onAppEvent('qzhuaAuth', (event) => {
     if (event.status === 'logged_in') {
         qzhuaLoggedIn = true;
         renderQZhuaProfile(event.profile || { qzhua: {
@@ -448,6 +517,24 @@ const filteredLogRows = () => runLogs.filter((x) =>
     && (!logQuery || x.msg.toLowerCase().includes(logQuery))
 );
 
+const createLogRow = (x) => {
+    const el = document.createElement('div');
+    el.className = 'log-line';
+    el.innerHTML = '<span class="log-time"></span><span class="log-source"></span><span class="log-tag"></span><span class="log-msg"></span>';
+    // 全部用 textContent 写入，避免节点名等文本注入 HTML
+    el.querySelector('.log-time').textContent = x.time;
+    el.querySelector('.log-source').textContent = `[${logSourceLabel(x.source)}]`;
+    el.querySelector('.log-tag').textContent = `[${logLevelTag(x.level)}]`;
+    el.querySelector('.log-msg').textContent = x.msg;
+    return el;
+};
+
+// 上一次渲染的锚点（最后一条日志对象 + 行数 + 筛选签名）。
+// 只要锚点还在当前结果里，就说明这次只是尾部追加，补几行即可；
+// 每帧全量重建最多 1000 行 DOM 是测速时掉帧的主要来源之一。
+let logRenderAnchor = null;
+const logFilterSig = () => `${logFilterSource}|${logQuery}`;
+
 const renderLogs = () => {
     const list = $('logList');
     if (!list) return;
@@ -455,18 +542,30 @@ const renderLogs = () => {
     if ($('logFilterCount')) $('logFilterCount').textContent = `${rows.length} 条`;
     if (!rows.length) {
         list.innerHTML = `<div class="log-empty"><b>暂无日志</b><small>${runLogs.length ? '当前筛选条件下没有匹配记录' : '执行延迟测速或带宽测速后，记录会显示在这里'}</small></div>`;
+        logRenderAnchor = null;
         return;
     }
-    list.innerHTML = rows.map((x) => `
-        <div class="log-line">
-            <span class="log-time">${x.time}</span>
-            <span class="log-source">[${logSourceLabel(x.source)}]</span>
-            <span class="log-tag">[${logLevelTag(x.level)}]</span>
-            <span class="log-msg"></span>
-        </div>`).join('');
-    // 消息用 textContent 写入，避免节点名等文本注入 HTML
-    const msgEls = list.querySelectorAll('.log-msg');
-    rows.forEach((x, i) => { if (msgEls[i]) msgEls[i].textContent = x.msg; });
+    const sig = logFilterSig();
+    const anchor = logRenderAnchor;
+    // indexOf 是对象身份比较：只用同一个数组里的引用才认
+    const from = anchor && anchor.sig === sig ? rows.indexOf(anchor.tail) : -1;
+    if (from >= 0) {
+        // 超过 1000 条上限后 runLogs 从头部丢日志：DOM 头部对应那几行也要删掉，
+        // 否则界面会一直挂着已经不在内存里的旧日志。
+        const stale = anchor.len - 1 - from;
+        for (let i = 0; i < stale; i++) list.firstElementChild?.remove();
+        if (rows.length > from + 1) {
+            const frag = document.createDocumentFragment();
+            for (let i = from + 1; i < rows.length; i++) frag.appendChild(createLogRow(rows[i]));
+            list.appendChild(frag);
+        }
+    } else {
+        const frag = document.createDocumentFragment();
+        rows.forEach((x) => frag.appendChild(createLogRow(x)));
+        list.innerHTML = '';
+        list.appendChild(frag);
+    }
+    logRenderAnchor = { sig, len: rows.length, tail: rows[rows.length - 1] };
     if ($('logAutoScroll')?.checked) list.scrollTop = list.scrollHeight;
 };
 
@@ -504,10 +603,10 @@ document.querySelectorAll('.log-filter').forEach((btn) => {
         renderLogs();
     });
 });
-$('logSearch')?.addEventListener('input', (e) => {
+$('logSearch')?.addEventListener('input', debounce((e) => {
     logQuery = e.target.value.trim().toLowerCase();
     renderLogs();
-});
+}));
 $('logClearBtn')?.addEventListener('click', () => {
     runLogs.length = 0;
     updateLogCounts();
@@ -549,6 +648,7 @@ $('logExportBtn')?.addEventListener('click', async () => {
     }
 });
 let speedPaused = false;
+let speedToggling = false; // 暂停/继续请求在途，挡住连点发出互相矛盾的指令
 let speedMeasuring = false;
 let speedSamples = [];
 const nodeSpeedState = new Map();
@@ -713,8 +813,9 @@ const setSpeedRunning = (running) => {
     $('speedCancelBtn').classList.toggle('hidden', !running);
     updateBandwidthRunUI();
     updateExportUI();
+    syncRefreshButtons();
 };
-EventsOn('speed', (ev) => {
+onAppEvent('speed', (ev) => {
     if (!speedMeasuring && speedRunning) {
         speedMeasuring = true;
         updateBandwidthRunUI();
@@ -751,17 +852,17 @@ EventsOn('speed', (ev) => {
     }
     if (shouldDrawSample) drawSpeedChart();
 });
-EventsOn('speedRunProgress', (ev) => {
+onAppEvent('speedRunProgress', (ev) => {
     const progress = Math.round(Math.min(1, Math.max(0, ev.progress || 0)) * 100);
     if ($('speedProgress')) $('speedProgress').innerHTML = `${progress}<em>%</em>`;
     $('bandwidthProgressFill').style.width = `${progress}%`;
     $('currentSpeedNode').textContent = `运行中 ${ev.active} 个任务 · 已完成 ${ev.completed}/${ev.total}`;
 });
-EventsOn('speedLog', (ev) => {
+onAppEvent('speedLog', (ev) => {
     appendSpeedLog(ev.level || 'info', ev.msg || '');
 });
 // 单节点完成：把该节点结果写进卡片与排行榜（多节点串行时逐个落地）
-EventsOn('speedNodeDone', (ev) => {
+onAppEvent('speedNodeDone', (ev) => {
     const key = String(ev.id);
     activeSpeedNodes.delete(key);
     completedSpeedNodes.add(key);
@@ -769,7 +870,7 @@ EventsOn('speedNodeDone', (ev) => {
     if (ev.error) {
         bandwidthResults.set(key, { ...(bandwidthResults.get(key) || {}), error: ev.error });
         if (key === detailNodeId) showBandwidthDetail(nodes.find((node) => String(node.id) === key), false);
-        buildBandwidthGroups();
+        updateBandwidthCard(key);
         followActiveSpeedNode();
         return;
     }
@@ -784,12 +885,13 @@ EventsOn('speedNodeDone', (ev) => {
     });
     if (key !== '__last__') bandwidthResults.delete('__last__');
     if (key === detailNodeId) showBandwidthDetail(nodes.find((node) => String(node.id) === key), false);
-    buildBandwidthGroups();
-    renderBandwidthLeaderboard();
+    // 只更新这一张卡 + 按帧合并的排行榜：逐个全量重建在 N 个节点上是 O(N²)
+    updateBandwidthCard(key);
+    scheduleBandwidthLeaderboard();
     $('bandwidthLeaderboard')?.classList.remove('hidden');
     followActiveSpeedNode();
 });
-EventsOn('speedDone', (ev) => {
+onAppEvent('speedDone', (ev) => {
     setSpeedRunning(false);
     if ($('speedDown')) $('speedDown').innerHTML = `${formatSpeed(ev.downAvg)}<em> Mbps</em>`;
     if ($('speedUp')) $('speedUp').innerHTML = `${formatSpeed(ev.upAvg)}<em> Mbps</em>`;
@@ -797,9 +899,14 @@ EventsOn('speedDone', (ev) => {
     $('bandwidthProgressFill').style.width = ev.cancelled ? '0%' : '100%';
     $('currentSpeedNode').textContent = ev.cancelled ? '已停止' : '已完成';
     // 单节点结果由 speedNodeDone 落地，这里只负责整轮收尾
-    if (ev.cancelled) $('bandwidthLeaderboard')?.classList.add('hidden');
-    else renderBandwidthLeaderboard();
-    if (ev.cancelled) resetRings();
+    if (ev.cancelled) {
+        // 先撤掉排队中的排行榜渲染，否则下一帧会把刚隐藏的榜单又画出来
+        cancelScheduledBandwidthLeaderboard();
+        $('bandwidthLeaderboard')?.classList.add('hidden');
+        resetRings();
+    } else {
+        renderBandwidthLeaderboard();
+    }
     if (ev.cancelled) {
         appendSpeedLog('warn', '测速已停止');
     } else {
@@ -808,7 +915,7 @@ EventsOn('speedDone', (ev) => {
     updateExportUI();
 });
 // 后端判定未登录 / 登录已过期（带宽测速要建临时隧道，没有令牌跑不了）
-EventsOn('speedNeedLogin', () => {
+onAppEvent('speedNeedLogin', () => {
     setSpeedRunning(false);
     if ($('currentSpeedNode')) $('currentSpeedNode').textContent = '请先登录账号';
     appendSpeedLog('warn', qzhuaLoggedIn ? '登录已过期，请重新登录 CHMLFrp' : '未登录：带宽测速需要在账号里创建临时隧道');
@@ -850,11 +957,26 @@ const startSpeedRun = async () => {
 $('speedBtn').addEventListener('click', async () => {
     if (frpcCacheBusy || speedStarting) return;
     if (speedRunning) {
-        speedPaused = !speedPaused;
-        if (speedPaused) await PauseSpeedTest();
-        else await ResumeSpeedTest();
-        setSpeedRunning(true);
-        appendSpeedLog('info', speedPaused ? '测速已暂停' : '测速已恢复');
+        if (speedToggling) return;
+        // 以后端返回结果为准再改前端状态：先翻转本地变量、请求失败就会和真实状态脱节。
+        const nextPaused = !speedPaused;
+        speedToggling = true;
+        try {
+            if (nextPaused) await PauseSpeedTest();
+            else await ResumeSpeedTest();
+            // 请求期间测速可能已经自然结束，这时再改暂停态会让下一次启动显示成「继续」
+            if (speedRunning) {
+                speedPaused = nextPaused;
+                appendSpeedLog('info', speedPaused ? '测速已暂停' : '测速已恢复');
+            }
+        } catch (err) {
+            appendSpeedLog('err', `切换测速状态失败：${err}`);
+        } finally {
+            speedToggling = false;
+            // 只刷新按钮文案：不能无条件 setSpeedRunning(true)，
+            // 否则测速恰好在这段时间里结束时，会把界面重新标成「运行中」。
+            if (speedRunning) updateBandwidthRunUI();
+        }
         return;
     }
     // 带宽测速必须登录（要建临时隧道），未登录时直接引导，不弹任务框
@@ -927,12 +1049,22 @@ $('taskStartBtn').addEventListener('click', async () => {
     }
 });
 $('speedCancelBtn').addEventListener('click', async () => {
+    const btn = $('speedCancelBtn');
+    // 停止请求在途时重复点击没有意义，后端也会拒绝第二次取消
+    if (btn.disabled) return;
+    btn.disabled = true;
     appendSpeedLog('warn', '用户点击停止测速');
-    await CancelSpeedTest();
-    $('currentSpeedNode').textContent = '未开始';
+    try {
+        await CancelSpeedTest();
+        $('currentSpeedNode').textContent = '未开始';
+    } catch (err) {
+        appendSpeedLog('err', `停止测速失败：${err}`);
+    } finally {
+        btn.disabled = false;
+    }
 });
 
-EventsOn('speedNode', (ev) => {
+onAppEvent('speedNode', (ev) => {
     const key = String(ev.id);
     bandwidthResults.set(key, { ...(bandwidthResults.get(key) || {}), delay: ev.delay });
     const el = document.querySelector(`[data-bandwidth-delay="${key}"]`);
@@ -945,7 +1077,7 @@ EventsOn('speedNode', (ev) => {
     appendSpeedLog('ok', `#${ev.id} ${ev.name} · 延迟 ${ev.delay}ms · ${tone}`);
 });
 
-EventsOn('speedNodeProgress', (ev) => {
+onAppEvent('speedNodeProgress', (ev) => {
     const key = String(ev.id);
     setRing(key, ev.progress * 100);
     if (ev.progress < 1 && !completedSpeedNodes.has(key)) {
@@ -1097,11 +1229,50 @@ function hidePreferLeaderboard() {
     $('preferLeaderboard')?.classList.add('hidden');
 }
 
+// 带宽视图的卡片是否落后于数据：隐藏时只标脏，切过去再重建
+let bandwidthGroupsDirty = false;
+
 function bandwidthCardHTML(n) {
     const pill = n.group === 'vip' ? '<span class="pill vip">VIP</span>' : '<span class="pill user">普通</span>';
     const result = bandwidthResults.get(String(n.id));
     const d = result?.delay;
-    return `<div class="nc-top"><span class="nc-id">#${n.id}</span><span>${pill}</span></div><div class="nc-name">${esc(n.name)}</div><div class="bandwidth-metrics"><span>延迟 <b data-bandwidth-delay="${n.id}" class="${d === undefined ? '' : `delay-value ${delayTone(d)}`}">${d === undefined ? '--' : `${d}ms`}</b></span><span>下载 <b>${result?.down ?? '--'}</b></span><span>上传 <b>${result?.up ?? '--'}</b></span></div><svg class="nc-ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="nc-ring-track" cx="18" cy="18" r="15.9" pathLength="100"/><circle class="nc-ring-fg" data-ring="${n.id}" cx="18" cy="18" r="15.9" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/></svg><button class="node-detail-btn" type="button" data-test-id="${n.id}">详情</button>`;
+    return `<div class="nc-top"><span class="nc-id">#${n.id}</span><span>${pill}</span></div><div class="nc-name">${esc(n.name)}</div><div class="bandwidth-metrics"><span>延迟 <b data-bandwidth-delay="${n.id}" class="${d === undefined ? '' : `delay-value ${delayTone(d)}`}">${d === undefined ? '--' : `${d}ms`}</b></span><span>下载 <b data-bandwidth-down="${n.id}">${result?.down ?? '--'}</b></span><span>上传 <b data-bandwidth-up="${n.id}">${result?.up ?? '--'}</b></span></div><svg class="nc-ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="nc-ring-track" cx="18" cy="18" r="15.9" pathLength="100"/><circle class="nc-ring-fg" data-ring="${n.id}" cx="18" cy="18" r="15.9" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/></svg><button class="node-detail-btn" type="button" data-test-id="${n.id}">详情</button>`;
+}
+
+// 单节点结果落地时只改这一张卡。多节点串行跑，每完成一个就全量重建
+// 整个卡片列表是 O(N²) 的 DOM 重排，节点多时会明显卡。
+function updateBandwidthCard(id) {
+    if (bandwidthGroupsDirty) return; // 整块待重建，这里改了也会被覆盖
+    const key = String(id);
+    const result = bandwidthResults.get(key);
+    if (!result) return;
+    const delayEl = document.querySelector(`[data-bandwidth-delay="${key}"]`);
+    if (delayEl) {
+        const d = result.delay;
+        delayEl.textContent = d === undefined ? '--' : `${d}ms`;
+        delayEl.className = d === undefined ? '' : `delay-value ${delayTone(d)}`;
+    }
+    const downEl = document.querySelector(`[data-bandwidth-down="${key}"]`);
+    if (downEl) downEl.textContent = result.down ?? '--';
+    const upEl = document.querySelector(`[data-bandwidth-up="${key}"]`);
+    if (upEl) upEl.textContent = result.up ?? '--';
+}
+
+// 排行榜按帧合并：N 个节点各自触发一次重排，逐次渲染同样是 O(N²)。
+let bandwidthBoardRaf = 0;
+function scheduleBandwidthLeaderboard() {
+    if (bandwidthBoardRaf) return;
+    bandwidthBoardRaf = requestAnimationFrame(() => {
+        bandwidthBoardRaf = 0;
+        renderBandwidthLeaderboard();
+    });
+}
+
+// 取消排队中的一次重排：测速被中止时队列里那一帧会把刚隐藏的排行榜又显示出来
+function cancelScheduledBandwidthLeaderboard() {
+    if (!bandwidthBoardRaf) return;
+    cancelAnimationFrame(bandwidthBoardRaf);
+    bandwidthBoardRaf = 0;
 }
 
 function setRing(id, pct) {
@@ -1162,7 +1333,7 @@ function buildGroups() {
     }
     ensureLoginHint(wrap);
     updateSelUI();
-    buildBandwidthGroups();
+    syncBandwidthCards();
     updateExportUI();
 }
 
@@ -1208,6 +1379,23 @@ function buildBandwidthGroups() {
     ensureLoginHint(wrap);
     updateBandwidthRunUI();
     updateExportUI();
+    bandwidthGroupsDirty = false;
+}
+
+// 两个视图（延迟 / 带宽）各自一份卡片，同一时刻只有一个可见。
+// 任一视图的筛选、搜索、选中变化都只需要重建自己：把另一份标脏，
+// 等真正切过去再建，避免一次按键把两套 DOM 都重排一遍。
+function isViewActive(id) {
+    return Boolean($(id)?.classList.contains('active'));
+}
+
+function syncBandwidthCards() {
+    if ($('bandwidthSelectAllBtn')) $('bandwidthSelectAllBtn').textContent = isAllSelected() ? '取消全选' : '全选';
+    if (isViewActive('view-bandwidth')) {
+        buildBandwidthGroups();
+        return;
+    }
+    bandwidthGroupsDirty = true;
 }
 
 function showBandwidthDetail(node, open = true) {
@@ -1279,7 +1467,7 @@ function toggleSelect(el, n) {
     el.classList.toggle('selected', selected.has(id));
     document.querySelectorAll(`.node-card[data-id="${id}"]`).forEach((card) => card.classList.toggle('selected', selected.has(id)));
     updateSelUI();
-    buildBandwidthGroups();
+    syncBandwidthCards();
 }
 
 $('selectAllBtn').addEventListener('click', () => {
@@ -1290,7 +1478,7 @@ $('selectAllBtn').addEventListener('click', () => {
     document.querySelectorAll('.node-card').forEach((c) =>
         c.classList.toggle('selected', selected.has(c.dataset.id)));
     updateSelUI();
-    buildBandwidthGroups();
+    syncBandwidthCards();
 });
 
 const cardById = (id) => document.querySelector(`.node-card[data-id="${id}"]`);
@@ -1332,6 +1520,7 @@ function ensureLoginHint(container) {
 // 未登录时 /nodeinfo 拿不到节点真实 IP，卡片摆出来既点不了也测不了，纯属误导。
 function renderLoginOnly() {
     if (qzhuaLoggedIn) return;
+    nodeLoadVersion++; // 作废在途的节点请求，防止旧结果在退出登录后又写回
     nodes = [];
     results.clear();
     preferStats.clear();
@@ -1350,7 +1539,6 @@ function renderLoginOnly() {
     updateExportUI();
 }
 
-let nodesLoading = false;
 // force=true 只在用户主动点「刷新」时传，用来跳过后端 5 分钟的节点缓存
 async function loadNodes(force = false) {
     // 未登录直接走引导分支，不发请求、不渲染卡片
@@ -1358,31 +1546,36 @@ async function loadNodes(force = false) {
         renderLoginOnly();
         return;
     }
-    if (nodesLoading) return;
-    nodesLoading = true;
+    // 不再用 nodesLoading 互斥：退出后重新登录必须能立即发起新请求，
+    // 旧请求是否作废交给版本号判断。
+    const version = ++nodeLoadVersion;
+    $('groups').innerHTML = '<div class="empty-state"><span class="loader"></span><b>正在加载节点</b><small>请稍候</small></div>';
+    $('bandwidthGroups').innerHTML = '<div class="empty-state"><span class="loader"></span><b>正在加载节点</b><small>请稍候</small></div>';
+    $('preferStatus').textContent = '节点加载中…';
+
+    let loaded;
     try {
-        $('groups').innerHTML = '<div class="empty-state"><span class="loader"></span><b>正在加载节点</b><small>请稍候</small></div>';
-        $('bandwidthGroups').innerHTML = '<div class="empty-state"><span class="loader"></span><b>正在加载节点</b><small>请稍候</small></div>';
-        $('preferStatus').textContent = '节点加载中…';
-        try {
-            nodes = await GetNodes('all', force);
-        } catch (err) {
-            $('groups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${esc(err)}</small></div>`;
-            $('bandwidthGroups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${esc(err)}</small></div>`;
-            $('preferStatus').textContent = '节点拉取失败';
-            ensureLoginHint($('groups'));
-            ensureLoginHint($('bandwidthGroups'));
-            return;
-        }
-        // 清理已不存在的选中 id
-        const valid = new Set(nodes.map((n) => String(n.id)));
-        let pruned = false;
-        for (const id of [...selected]) if (!valid.has(id)) { selected.delete(id); pruned = true; }
-        if (pruned) saveSel();
-        buildGroups();
-    } finally {
-        nodesLoading = false;
+        loaded = await GetNodes('all', force);
+    } catch (err) {
+        // 失败时也要确认自己仍是当前请求，否则会把新登录的界面覆盖成错误态
+        if (version !== nodeLoadVersion || !qzhuaLoggedIn) return;
+        $('groups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${esc(err)}</small></div>`;
+        $('bandwidthGroups').innerHTML = `<div class="empty-state"><b>节点加载失败</b><small>${esc(err)}</small></div>`;
+        $('preferStatus').textContent = '节点拉取失败';
+        ensureLoginHint($('groups'));
+        ensureLoginHint($('bandwidthGroups'));
+        return;
     }
+    // 请求期间退出登录或又发起了新一轮加载：直接丢弃这次结果
+    if (version !== nodeLoadVersion || !qzhuaLoggedIn) return;
+
+    nodes = Array.isArray(loaded) ? loaded : [];
+    // 清理已不存在的选中 id
+    const valid = new Set(nodes.map((n) => String(n.id)));
+    let pruned = false;
+    for (const id of [...selected]) if (!valid.has(id)) { selected.delete(id); pruned = true; }
+    if (pruned) saveSel();
+    buildGroups();
 }
 
 document.querySelectorAll('#view-speed .filter').forEach((button) => {
@@ -1400,33 +1593,58 @@ document.querySelectorAll('.bandwidth-filter').forEach((button) => {
     });
 });
 
-$('preferNodeSearch').addEventListener('input', (event) => {
+$('preferNodeSearch').addEventListener('input', debounce((event) => {
     preferNodeQuery = event.target.value;
     buildGroups();
-});
+}));
 
-$('bandwidthNodeSearch').addEventListener('input', (event) => {
+$('bandwidthNodeSearch').addEventListener('input', debounce((event) => {
     bandwidthNodeQuery = event.target.value;
     buildBandwidthGroups();
-});
+}));
 
-$('refreshBtn').addEventListener('click', () => {
-    if (preferRunning) return;
-    if (!qzhuaLoggedIn) {
-        openLoginModal();
-        return;
-    }
+// 两个视图共用同一份 nodes：刷新会整体替换列表，而正在跑的测速任务仍按旧列表
+// 继续执行，于是卡片已经换成新节点、任务却还在报旧节点的进度，界面与任务对不上。
+// 所以任一测速在跑时两个刷新按钮都要禁用，而不是各看各的状态。
+function syncRefreshButtons() {
+    const busy = preferRunning || bandwidthRunning;
+    ['refreshBtn', 'bandwidthRefreshBtn'].forEach((id) => {
+        const btn = $(id);
+        if (!btn) return;
+        btn.disabled = busy;
+        btn.title = busy ? '测速进行中，结束后可刷新' : '重新拉取节点列表';
+    });
+}
+
+// 节点列表被整体替换后，旧的测速结果不再对应确定的节点：三处结果容器一起清空，
+// 否则会出现「延迟已经是新值，发送次数/丢包率还停在上一轮」这种自相矛盾的卡片。
+function clearTestResults() {
     results.clear();
-    loadNodes(true);
-});
-$('bandwidthRefreshBtn').addEventListener('click', () => {
-    if (bandwidthRunning) return;
+    preferStats.clear();
+    bandwidthResults.clear();
+    hidePreferLeaderboard();
+    $('bandwidthLeaderboard')?.classList.add('hidden');
+    updateExportUI();
+}
+
+function refreshNodes(fromBandwidth) {
+    // 按钮此时通常已被禁用，这里再挡一次：状态同步万一有延迟也不会真的发出请求。
+    if (preferRunning || bandwidthRunning) {
+        const msg = '测速进行中，已忽略本次节点刷新';
+        if (fromBandwidth) appendSpeedLog('warn', msg);
+        else appendLog('prefer', 'warn', msg);
+        return;
+    }
     if (!qzhuaLoggedIn) {
         openLoginModal();
         return;
     }
+    clearTestResults();
     loadNodes(true);
-});
+}
+
+$('refreshBtn').addEventListener('click', () => refreshNodes(false));
+$('bandwidthRefreshBtn').addEventListener('click', () => refreshNodes(true));
 $('bandwidthSelectAllBtn').addEventListener('click', () => {
     if (!nodes.length) return;
     const all = nodes.every((n) => selected.has(String(n.id)));
@@ -1450,7 +1668,7 @@ function setPreferBtn(running, loading = false) {
     updateExportUI();
 }
 
-EventsOn('preferEvent', (ev) => {
+onAppEvent('preferEvent', (ev) => {
     switch (ev.kind) {
         case 'start':
             preferRunning = true;
@@ -1473,7 +1691,7 @@ EventsOn('preferEvent', (ev) => {
                 });
             });
             setPreferBtn(true);
-            $('refreshBtn').disabled = true;
+            syncRefreshButtons();
             closeExportMenu('prefer');
             $('preferStatus').textContent = '准备测速';
             $('preferProgressFill').style.width = '0%';
@@ -1529,7 +1747,7 @@ EventsOn('preferEvent', (ev) => {
         case 'finish': {
             preferRunning = false;
             setPreferBtn(false);
-            $('refreshBtn').disabled = false;
+            syncRefreshButtons();
             document.querySelectorAll('.node-card').forEach((c) => c.classList.remove('testing'));
             if (ev.result && ev.result.length) {
                 renderPreferLeaderboard(ev.result);
@@ -1552,7 +1770,7 @@ EventsOn('preferEvent', (ev) => {
             // 后端确认拿不到节点 IP 且未登录：这不是“取消”，要引导去登录
             preferRunning = false;
             setPreferBtn(false);
-            $('refreshBtn').disabled = false;
+            syncRefreshButtons();
             document.querySelectorAll('.node-card.testing').forEach((c) => c.classList.remove('testing'));
             $('preferStatus').textContent = '请先登录账号';
             $('preferProgressFill').style.width = '0%';
@@ -1564,7 +1782,7 @@ EventsOn('preferEvent', (ev) => {
         case 'error':
             preferRunning = false;
             setPreferBtn(false);
-            $('refreshBtn').disabled = false;
+            syncRefreshButtons();
             document.querySelectorAll('.node-card.testing').forEach((c) => c.classList.remove('testing'));
             $('preferStatus').textContent = '测速无法开始';
             $('preferProgressFill').style.width = '0%';
@@ -1574,7 +1792,7 @@ EventsOn('preferEvent', (ev) => {
         case 'cancel':
             preferRunning = false;
             setPreferBtn(false);
-            $('refreshBtn').disabled = false;
+            syncRefreshButtons();
             document.querySelectorAll('.node-card.testing').forEach((c) => c.classList.remove('testing'));
             $('preferStatus').textContent = '测速已取消';
             $('preferProgressFill').style.width = '0%';
@@ -1596,7 +1814,7 @@ $('preferBtn').addEventListener('click', async () => {
     if (!nodes.length) return;
     preferRunning = true;
     setPreferBtn(true, true);
-    $('refreshBtn').disabled = true;
+    syncRefreshButtons();
     $('preferStatus').textContent = '准备测速';
     appendLog('prefer', 'info', selected.size ? `准备测速已选 ${selected.size} 个节点` : '准备测速全部节点');
     try {
@@ -1604,14 +1822,26 @@ $('preferBtn').addEventListener('click', async () => {
     } catch (err) {
         preferRunning = false;
         setPreferBtn(false);
-        $('refreshBtn').disabled = false;
+        syncRefreshButtons();
         $('preferStatus').textContent = '测速启动失败';
         appendLog('prefer', 'err', '启动延迟测速失败：' + err);
     }
 });
 $('preferCancelBtn').addEventListener('click', async () => {
+    const btn = $('preferCancelBtn');
+    // 与带宽测速的停止按钮保持一致：请求在途时重复点击没有意义
+    if (btn.disabled) return;
+    btn.disabled = true;
     appendLog('prefer', 'warn', '用户点击停止测速');
-    await CancelPrefer();
+    try {
+        await CancelPrefer();
+    } catch (err) {
+        // 取消失败时不要动 preferRunning：界面继续显示「测速中」才是真实状态，
+        // 按钮恢复可点，用户可以再试一次。
+        appendLog('prefer', 'err', '停止延迟测速失败：' + err);
+    } finally {
+        btn.disabled = false;
+    }
 });
 
 // 两个导出按钮共用同一套可用性规则：
@@ -1638,6 +1868,17 @@ function updateExportUI() {
 // 导出结果一律按实测延迟排序，而不是节点编号顺序：
 // 图片只截前 12 行，按编号排就成了「编号最小的 12 个」，跟快慢无关；
 // CSV 虽是全量清单，但用户看的是「哪个节点最快」，编号序同样不直观。
+
+// CSV 单元格统一处理：引号转义 + 防电子表格公式注入。
+// 节点名称、区域等文本来自远端接口，不能假设它们不会以 = + - @ 开头。
+const CSV_FORMULA = /^[\u0000-\u0020]*[=+\-@]/;
+const csvCell = (value) => {
+    let text = String(value ?? '');
+    if (CSV_FORMULA.test(text)) text = "'" + text;
+    return `"${text.replace(/"/g, '""')}"`;
+};
+const toCsvText = (rows) => '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
+
 const preferExportRows = () => {
     // 只让「测到了延迟」的节点参与排名：超时节点在 results 里是 -1，
     // 若直接排序会拿到第 1 名（-1 最小），导出表就出现"-1ms 排名 1"的假数据。
@@ -1680,9 +1921,7 @@ const preferExportRows = () => {
 const exportPreferCsv = async () => {
     if (!nodes.length) return;
     const rows = preferExportRows();
-    const csv = '\uFEFF' + rows.map((r) =>
-        r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')
-    ).join('\r\n');
+    const csv = toCsvText(rows);
     try {
         const path = await SaveCSV(csv);
         if (path) $('preferStatus').innerHTML = `已导出：<b>${esc(path)}</b>`;
@@ -1695,11 +1934,13 @@ const exportPreferCsv = async () => {
 // 否则 mac/Linux 上 "Microsoft YaHei" 不存在，中文会整片掉成方块。
 const CANVAS_FONT = '"Microsoft YaHei","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Source Han Sans SC",sans-serif';
 
-const exportPreferPng = async () => {
-    if (!nodes.length) return;
-    const rows = preferExportRows();
-    const w = 980;
-    const h = 640;
+// ---------- 两份 PNG 报告共用的排版骨架 ----------
+// 画布尺寸、底色、标题、副标题、表头位置、表格行距都写在这里，
+// 两个导出只负责自己的列定义、单元格取值与图表内容。
+const REPORT_SIZE = { w: 980, h: 640, tableTop: 140, rowHeight: 22, maxRows: 12, colsLeft: 36 };
+
+function createReportCanvas({ title, subtitle, cols, headers }) {
+    const { w, h } = REPORT_SIZE;
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
@@ -1710,32 +1951,47 @@ const exportPreferPng = async () => {
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = color('--text', '#f2f4f7');
     ctx.font = `600 20px ${CANVAS_FONT}`;
-    ctx.fillText('ChmlFrp 延迟测速报告', 36, 48);
+    ctx.fillText(title, REPORT_SIZE.colsLeft, 48);
     ctx.fillStyle = color('--muted', '#8b939e');
     ctx.font = `12px ${CANVAS_FONT}`;
-    const tested = [...results.keys()].length;
-    ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　按延迟从低到高排序`, 36, 74);
-    const cols = [36, 96, 330, 430, 510, 590, 670, 760, 850];
-    const headers = ['编号', '名称', '区域', '节点组', '地域', 'UDP', '防御', '延迟', '排名'];
+    ctx.fillText(subtitle, REPORT_SIZE.colsLeft, 74);
     ctx.fillStyle = color('--dim', '#5c6570');
     ctx.font = `11px ${CANVAS_FONT}`;
     headers.forEach((t, i) => ctx.fillText(t, cols[i], 108));
     ctx.strokeStyle = color('--line', '#292e36');
     ctx.beginPath();
-    ctx.moveTo(36, 116);
-    ctx.lineTo(w - 36, 116);
+    ctx.moveTo(REPORT_SIZE.colsLeft, 116);
+    ctx.lineTo(w - REPORT_SIZE.colsLeft, 116);
     ctx.stroke();
+    return { canvas, ctx, color, w, h };
+}
+
+// 表格区：rows 是导出二维数组（第 0 行表头），cell(行) 负责转成单元格文本
+function drawReportTable(ctx, color, cols, rows, cell) {
     ctx.font = `12px ${CANVAS_FONT}`;
-    rows.slice(1, 13).forEach((r, idx) => {
-        const y = 140 + idx * 22;
+    rows.slice(1, REPORT_SIZE.maxRows + 1).forEach((r, idx) => {
+        const y = REPORT_SIZE.tableTop + idx * REPORT_SIZE.rowHeight;
         ctx.fillStyle = color('--text', '#f2f4f7');
-        const cell = [
-            `#${r[0]}`, String(r[1]).slice(0, 18), String(r[2]).slice(0, 10), String(r[3]), String(r[4]),
-            String(r[6]), String(r[7]),
-            r[8] === '' ? '--' : `${r[8]} ms`, r[9] === '' ? '--' : `#${r[9]}`,
-        ];
-        cell.forEach((t, i) => ctx.fillText(t, cols[i], y));
+        cell(r).forEach((t, i) => ctx.fillText(t, cols[i], y));
     });
+}
+
+const exportPreferPng = async () => {
+    if (!nodes.length) return;
+    const rows = preferExportRows();
+    const tested = [...results.keys()].length;
+    const cols = [36, 96, 330, 430, 510, 590, 670, 760, 850];
+    const { canvas, ctx, color, w } = createReportCanvas({
+        title: 'ChmlFrp 延迟测速报告',
+        subtitle: `测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　按延迟从低到高排序`,
+        cols,
+        headers: ['编号', '名称', '区域', '节点组', '地域', 'UDP', '防御', '延迟', '排名'],
+    });
+    drawReportTable(ctx, color, cols, rows, (r) => [
+        `#${r[0]}`, String(r[1]).slice(0, 18), String(r[2]).slice(0, 10), String(r[3]), String(r[4]),
+        String(r[6]), String(r[7]),
+        r[8] === '' ? '--' : `${r[8]} ms`, r[9] === '' ? '--' : `#${r[9]}`,
+    ]);
     // 延迟对比柱状图（取已测节点中延迟最低的前 10 个）
     const chartTop = 430;
     const chartH = 170;
@@ -1822,9 +2078,6 @@ const bandwidthExportRows = () => {
     }
     return rows;
 };
-const toCsvText = (rows) => '﻿' + rows.map((r) =>
-    r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')
-).join('\r\n');
 
 const exportBandwidthCsv = async () => {
     if (!nodes.length) return;
@@ -1844,44 +2097,19 @@ const exportBandwidthCsv = async () => {
 const exportBandwidthPng = async () => {
     if (!nodes.length) return;
     const rows = bandwidthExportRows();
-    const w = 980;
-    const h = 640;
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    const css = getComputedStyle(document.documentElement);
-    const color = (name, fallback) => (css.getPropertyValue(name).trim() || fallback);
-    ctx.fillStyle = color('--bg', '#0d0f12');
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = color('--text', '#f2f4f7');
-    ctx.font = `600 20px ${CANVAS_FONT}`;
-    ctx.fillText('ChmlFrp 带宽测速报告', 36, 48);
-    ctx.fillStyle = color('--muted', '#8b939e');
-    ctx.font = `12px ${CANVAS_FONT}`;
     const tested = nodes.filter((n) => hasBandwidthResult(bandwidthResults.get(String(n.id)))).length;
-    ctx.fillText(`测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　单次时长：${settings.testSeconds} 秒　按下载速度从高到低排序`, 36, 74);
     const cols = [36, 96, 330, 390, 470, 560, 650, 740];
-    const headers = ['编号', '名称', '节点组', '地域', '延迟', '下载', '上传', '平均'];
-    ctx.fillStyle = color('--dim', '#5c6570');
-    ctx.font = `11px ${CANVAS_FONT}`;
-    headers.forEach((t, i) => ctx.fillText(t, cols[i], 108));
-    ctx.strokeStyle = color('--line', '#292e36');
-    ctx.beginPath();
-    ctx.moveTo(36, 116);
-    ctx.lineTo(w - 36, 116);
-    ctx.stroke();
-    ctx.font = `12px ${CANVAS_FONT}`;
-    rows.slice(1, 13).forEach((r, idx) => {
-        const y = 140 + idx * 22;
-        ctx.fillStyle = color('--text', '#f2f4f7');
-        const cell = [
-            `#${r[0]}`, String(r[1]).slice(0, 18), String(r[2]), String(r[3]),
-            r[4] === '' ? '--' : `${r[4]} ms`, r[5] === '' ? '--' : `${r[5]} Mbps`,
-            r[6] === '' ? '--' : `${r[6]} Mbps`, r[7] === '' ? '--' : `${r[7]} Mbps`,
-        ];
-        cell.forEach((t, i) => ctx.fillText(t, cols[i], y));
+    const { canvas, ctx, color, w } = createReportCanvas({
+        title: 'ChmlFrp 带宽测速报告',
+        subtitle: `测速时间：${new Date().toLocaleString('zh-CN')}　节点数：${nodes.length}　已测：${tested}　单次时长：${settings.testSeconds} 秒　按下载速度从高到低排序`,
+        cols,
+        headers: ['编号', '名称', '节点组', '地域', '延迟', '下载', '上传', '平均'],
     });
+    drawReportTable(ctx, color, cols, rows, (r) => [
+        `#${r[0]}`, String(r[1]).slice(0, 18), String(r[2]), String(r[3]),
+        r[4] === '' ? '--' : `${r[4]} ms`, r[5] === '' ? '--' : `${r[5]} Mbps`,
+        r[6] === '' ? '--' : `${r[6]} Mbps`, r[7] === '' ? '--' : `${r[7]} Mbps`,
+    ]);
     const chartTop = 430;
     const chartH = 160;
     ctx.fillStyle = color('--dim', '#5c6570');
@@ -1965,12 +2193,18 @@ document.addEventListener('click', () => closeAllExportMenus());
 
 // ---------- 主题（跟随系统开关 + 手动暗/亮） ----------
 const themeMode = {
-    get v() { return localStorage.getItem('appTheme') || 'dark'; },
-    set v(value) { localStorage.setItem('appTheme', value); },
+    get v() {
+        const v = readStorage('appTheme');
+        return v === 'system' || v === 'light' || v === 'dark' ? v : 'dark';
+    },
+    set v(value) { writeStorage('appTheme', value); },
 };
 const manualTheme = {
-    get v() { return localStorage.getItem('appThemeManual') || 'dark'; },
-    set v(value) { localStorage.setItem('appThemeManual', value); },
+    get v() {
+        const v = readStorage('appThemeManual');
+        return v === 'light' || v === 'dark' ? v : 'dark';
+    },
+    set v(value) { writeStorage('appThemeManual', value); },
 };
 const themeMQ = window.matchMedia('(prefers-color-scheme: light)');
 const applyTheme = () => {
@@ -2002,13 +2236,26 @@ document.querySelectorAll('.theme-btn').forEach((btn) => {
 });
 
 // ---------- 开机自启 ----------
+// 初始值由 GetAutostart 异步读回。读取期间禁用开关，避免「读取结果晚到、
+// 把用户刚点开的开关又覆盖回去」这种竞争；busy 标记是第二道保险，
+// 万一某些平台在禁用状态下仍派发了 change 事件，也不会被回读结果覆盖。
+let autostartReady = false;
+let autostartBusy = false;
+const autostartEl = $('setAutostart');
+autostartEl.disabled = true;
+
 $('setAutostart').addEventListener('change', async (e) => {
+    autostartBusy = true;
+    e.target.disabled = true;
     try {
         await SetAutostart(e.target.checked);
         $('autostartHint').textContent = e.target.checked ? '已开启开机自启' : '已关闭开机自启';
     } catch (err) {
         e.target.checked = !e.target.checked;
         $('autostartHint').textContent = String(err);
+    } finally {
+        autostartBusy = false;
+        if (autostartReady) e.target.disabled = false;
     }
 });
 
@@ -2025,7 +2272,10 @@ const AD_URL = 'https://fanyi.qzhua.net/';
     // dismissed：用户点 × 后本次会话内不再显示
     let dismissed = false;
     const syncAd = () => ad.classList.toggle('hidden', dismissed || !board.classList.contains('hidden'));
-    new MutationObserver(syncAd).observe(board, { attributes: true, attributeFilter: ['class'] });
+    const observer = new MutationObserver(syncAd);
+    observer.observe(board, { attributes: true, attributeFilter: ['class'] });
+    // 观察者也要登记：退出时统一 disconnect，否则会一直持有 board 的引用
+    adObservers.push(observer);
     syncAd();
     ad.querySelector('.ad-close')?.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2064,10 +2314,12 @@ const copyText = async (text) => {
     }
 };
 
-// 回环与内网地址没有公网归属地，v4/v6 公网地址都可查
-const ipLookupable = (x) => !x.loopback && !(x.version === 4 && x.private);
-const ipTagText = (x) => (x.loopback ? '回环' : x.version === 6 ? 'IPv6' : (x.private ? '内网' : '公网'));
-const ipTagClass = (x) => (x.loopback ? 'loop' : x.version === 6 ? 'v6' : (x.private ? 'lan' : 'wan'));
+// 回环与内网地址没有公网归属地，v4/v6 公网地址都可查。
+// 不能只对 IPv4 判 private：IPv6 的 ULA(fc00::/7) 同样是内网，
+// 后端已按协议族分别标记，这里只看标记本身。
+const ipLookupable = (x) => !x.loopback && !x.private;
+const ipTagText = (x) => (x.loopback ? '回环' : (x.private ? '内网' : (x.version === 6 ? 'IPv6' : '公网')));
+const ipTagClass = (x) => (x.loopback ? 'loop' : (x.private ? 'lan' : (x.version === 6 ? 'v6' : 'wan')));
 
 function renderLocalIPs(ips) {
     const list = $('localIpList');
@@ -2120,7 +2372,11 @@ function renderIPGeo(geo, self) {
     const card = $('ipInfoCard');
     const place = [geo.region, geo.city].filter(Boolean).join(' · ') || '地理位置未知';
     const withCode = (name, code) => (name ? `${name}${code ? ` (${code})` : ''}` : '--');
-    const coord = (geo.latitude || geo.longitude)
+    // 0 是合法坐标（赤道 / 本初子午线），用 || 判空会把 0 当成"没有坐标"；
+    // ipwho.is 查不到时给的是 0,0，所以只把两者同时为 0 视为未知。
+    const hasCoord = Number.isFinite(geo.latitude) && Number.isFinite(geo.longitude)
+        && (geo.latitude !== 0 || geo.longitude !== 0);
+    const coord = hasCoord
         ? `${Number(geo.latitude).toFixed(4)}, ${Number(geo.longitude).toFixed(4)}`
         : '--';
     // 时区额外显示缩写、UTC 偏移与夏令时标记
@@ -2178,16 +2434,37 @@ function renderIPGeoError(title, msg) {
 
 const stripErr = (err) => String(err).replace(/^Error:\s*/, '');
 
+// IP 查询是「后发先至」的典型场景：连点刷新、或点完某个地址的归属地又点刷新，
+// 先发的请求可能后返回，把新结果盖成旧地址。用递增序号只让最后一次落地，
+// 再用在途计数管理按钮，避免被取代的请求提前把按钮解禁。
+let ipQuerySeq = 0;
+let ipQueryInflight = 0;
+const beginIPQuery = () => {
+    ipQueryInflight += 1;
+    return ++ipQuerySeq;
+};
+const endIPQuery = () => {
+    ipQueryInflight = Math.max(0, ipQueryInflight - 1);
+    if (ipQueryInflight === 0) $('ipQueryBtn').disabled = false;
+};
+const isLatestIPQuery = (seq) => seq === ipQuerySeq;
+
 // 自动获取当前出口 IP 信息
 async function loadMyIP() {
+    const seq = beginIPQuery();
     renderIPGeoLoading('正在获取当前 IP 信息');
     $('toolQueryState').textContent = '获取中…';
     try {
-        renderIPGeo(await GetMyIPInfo(), true);
+        const geo = await GetMyIPInfo();
+        if (!isLatestIPQuery(seq)) return; // 已被更新的查询取代，丢弃这次结果
+        renderIPGeo(geo, true);
         $('toolQueryState').textContent = '已获取';
     } catch (err) {
+        if (!isLatestIPQuery(seq)) return;
         renderIPGeoError('获取当前 IP 失败', stripErr(err));
         $('toolQueryState').textContent = '获取失败';
+    } finally {
+        endIPQuery();
     }
 }
 
@@ -2198,18 +2475,22 @@ async function queryIP(inputIP) {
         return;
     }
     const btn = $('ipQueryBtn');
+    const seq = beginIPQuery();
     btn.disabled = true;
     $('toolQueryState').textContent = '查询中…';
     renderIPGeoLoading(`正在查询 ${ip}`);
     try {
-        renderIPGeo(await QueryIPInfo(ip), false);
+        const geo = await QueryIPInfo(ip);
+        if (!isLatestIPQuery(seq)) return;
+        renderIPGeo(geo, false);
         $('toolQueryState').textContent = '已查询';
     } catch (err) {
+        if (!isLatestIPQuery(seq)) return;
         renderIPGeoError('查询失败', stripErr(err));
         $('myIpBackBtn').classList.remove('hidden');
         $('toolQueryState').textContent = '查询失败';
     } finally {
-        btn.disabled = false;
+        endIPQuery();
     }
 }
 
@@ -2323,8 +2604,8 @@ function renderUpdateState(st) {
     $('updateModal').classList.remove('hidden');
 }
 
-EventsOn('updateState', renderUpdateState);
-EventsOn('updateProgress', (ev) => {
+onAppEvent('updateState', renderUpdateState);
+onAppEvent('updateProgress', (ev) => {
     if (updateSnapshot.status !== 'downloading') return;
     const done = ev.downloaded || 0;
     const total = ev.total || updateSnapshot.total || 0;
@@ -2418,8 +2699,17 @@ setTimeout(initUpdater, 3000);
 // ---------- 启动 ----------
 applyTheme();
 syncThemeUI();
-GetAutostart().then((on) => { $('setAutostart').checked = on; }).catch((err) => {
-    $('setAutostart').disabled = true;
+GetAutostart().then((on) => {
+    autostartReady = true;
+    // 用户在读取返回前已经操作过开关，就以他的操作为准，不要回填旧值；
+    // 这时也别急着解禁，交给 change 处理器的 finally 收尾。
+    if (autostartBusy) return;
+    autostartEl.checked = on;
+    autostartEl.disabled = false;
+}).catch((err) => {
+    autostartReady = true;
+    // 读不到当前状态就不要让用户改：改了也不知道原来是什么、失败也无从回滚
+    autostartEl.disabled = true;
     $('autostartHint').textContent = String(err);
 });
 
@@ -2633,9 +2923,7 @@ async function queryMC() {
         const info = await PingMCServer(address, mcKind);
         renderMC(info);
         $('mcQueryState').textContent = `查询完成 · ${Date.now() - started} ms`;
-        try {
-            localStorage.setItem('mcLast', JSON.stringify({ address, kind: mcKind }));
-        } catch (err) { /* 隐私模式下写不了，忽略 */ }
+        writeStorage('mcLast', JSON.stringify({ address, kind: mcKind }));
     } catch (err) {
         renderMCError(String(err));
         $('mcQueryState').textContent = '查询失败';
@@ -2648,13 +2936,11 @@ async function queryMC() {
 
 if ($('mcForm')) {
     // 回填上次查询的地址与类型
-    try {
-        const saved = JSON.parse(localStorage.getItem('mcLast') || 'null');
-        if (saved) {
-            if (saved.address) $('mcAddress').value = saved.address;
-            if (saved.kind === 'be') mcKind = 'be';
-        }
-    } catch (err) { /* 缓存损坏，忽略 */ }
+    const saved = readStorageJson('mcLast', null);
+    if (saved && typeof saved === 'object') {
+        if (typeof saved.address === 'string' && saved.address) $('mcAddress').value = saved.address;
+        if (saved.kind === 'be') mcKind = 'be';
+    }
     document.querySelectorAll('#view-mc .mc-kind .filter').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.mcKind === mcKind);
         btn.addEventListener('click', () => {
